@@ -1,0 +1,220 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?   // For credentials provider
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations
+  tasksAssigned TaskAssignee[]
+  tasksCreated  Task[]             @relation("TaskCreator")
+  projects      ProjectMember[]
+  teams         TeamMember[]
+  comments      Comment[]
+  emailLogs     EmailLog[]
+  activities    ActivityLog[]
+  
+  @@map("users")
+}
+
+model Task {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  description String?
+  status      TaskStatus @default(IN_PROGRESS)
+  priority    TaskPriority @default(MEDIUM)
+  dueDate     DateTime?
+  projectId   String?  @db.ObjectId
+  brand       String?
+  tags        String?  // JSON array of tags
+  recurring   RecurringType?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdById String   @db.ObjectId
+  
+  // Relations
+  createdBy   User      @relation("TaskCreator", fields: [createdById], references: [id])
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  assignees   TaskAssignee[]
+  comments    Comment[]
+  
+  @@map("tasks")
+}
+
+model TaskAssignee {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  taskId    String   @db.ObjectId
+  userId    String   @db.ObjectId
+  assignedAt DateTime @default(now())
+  
+  // Relations
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([taskId, userId])
+  @@map("task_assignees")
+}
+
+model Project {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  description String?
+  brand       String?
+  company     String?
+  status      ProjectStatus @default(ACTIVE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  tasks       Task[]
+  members     ProjectMember[]
+  
+  @@map("projects")
+}
+
+model ProjectMember {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  projectId String   @db.ObjectId
+  userId    String   @db.ObjectId
+  role      String   @default("member")
+  joinedAt  DateTime @default(now())
+  
+  // Relations
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([projectId, userId])
+  @@map("project_members")
+}
+
+model Team {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  members   TeamMember[]
+  
+  @@map("teams")
+}
+
+model TeamMember {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  teamId    String   @db.ObjectId
+  userId    String   @db.ObjectId
+  role      String   @default("member")
+  joinedAt  DateTime @default(now())
+  
+  // Relations
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([teamId, userId])
+  @@map("team_members")
+}
+
+model Comment {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  content   String
+  taskId    String   @db.ObjectId
+  userId    String   @db.ObjectId
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("comments")
+}
+
+model EmailLog {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  to        String   // JSON array of emails
+  cc        String?  // JSON array of emails
+  subject   String
+  body      String
+  sentAt    DateTime @default(now())
+  userId    String   @db.ObjectId
+  
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("email_logs")
+}
+
+model ActivityLog {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  type        ActivityType
+  action      String   // e.g., "Task Created", "Task Updated", "Review Assigned"
+  description String   // Detailed description
+  entityType  String?  // "task", "project", "email", etc.
+  entityId    String?  @db.ObjectId // ID of the related entity
+  metadata    String?  // JSON string for additional data
+  userId      String   @db.ObjectId
+  createdAt   DateTime @default(now())
+  
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("activity_logs")
+}
+
+enum ActivityType {
+  TASK_CREATED
+  TASK_UPDATED
+  TASK_DELETED
+  TASK_STATUS_CHANGED
+  TASK_ASSIGNED
+  TASK_REVIEW_REQUESTED
+  TASK_REVIEW_ACCEPTED
+  TASK_REVIEW_COMPLETED
+  PROJECT_CREATED
+  PROJECT_UPDATED
+  PROJECT_COMPLETED
+  EMAIL_SENT
+  COMMENT_ADDED
+}
+
+enum TaskStatus {
+  IN_PROGRESS
+  COMPLETED
+  YTS           // Yet to Start
+  ON_HOLD
+  RECURRING
+}
+
+enum TaskPriority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum RecurringType {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum ProjectStatus {
+  ACTIVE
+  COMPLETED
+  ON_HOLD
+  CANCELLED
+}
