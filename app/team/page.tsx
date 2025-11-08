@@ -75,6 +75,7 @@ export default function TeamPage() {
     subject: '',
     body: '',
   })
+  const [includeDepartmentTasks, setIncludeDepartmentTasks] = useState(false)
   
   // Debounce timer ref
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
@@ -264,12 +265,14 @@ export default function TeamPage() {
         to: emailForm.to.trim(),
         subject: emailForm.subject.trim(),
         body: emailForm.body.trim(),
+        includeDepartmentTasks: includeDepartmentTasks,
         ...(emailForm.cc && emailForm.cc.trim() && { cc: emailForm.cc.trim() }),
       }
       
       await apiClient.sendEmail(emailData)
       setIsEmailDialogOpen(false)
       setEmailForm({ to: '', cc: '', subject: '', body: '' })
+      setIncludeDepartmentTasks(false)
       alert('Email sent successfully!')
     } catch (error: any) {
       console.error('Failed to send email:', error)
@@ -747,6 +750,18 @@ export default function TeamPage() {
                           onChange={(e) => setEmailForm({ ...emailForm, body: e.target.value })}
                           placeholder="Email body"
                         />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="includeDepartmentTasks"
+                          className="rounded"
+                          checked={includeDepartmentTasks}
+                          onChange={(e) => setIncludeDepartmentTasks(e.target.checked)}
+                        />
+                        <Label htmlFor="includeDepartmentTasks" className="text-sm">
+                          Include department members' tasks (IN_PROGRESS & RECURRING)
+                        </Label>
                       </div>
                       <div className="flex items-center gap-2">
                         <input
