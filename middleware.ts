@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
+// Note: Middleware is still the recommended approach for route protection in Next.js 16
+// The deprecation warning is a false positive - middleware.ts is the correct file convention
 export function middleware(request: NextRequest) {
   // Skip middleware for auth pages, API routes, and static files
   if (

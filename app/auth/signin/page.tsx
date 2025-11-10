@@ -21,8 +21,10 @@ export default function SignInPage() {
     // Check if user is already logged in
     const token = getToken()
     if (token) {
+      // User is logged in, redirect to dashboard
       router.push('/dashboard')
     }
+    // If no token, stay on signin page (don't redirect)
   }, [router])
 
   const handleSubmit = async (e: React.FormEvent) => {

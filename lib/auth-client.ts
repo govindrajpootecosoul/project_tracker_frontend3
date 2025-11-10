@@ -51,10 +51,18 @@ export async function signUp(email: string, password: string, name?: string) {
 export function signOut() {
   apiClient.setToken(null)
   if (typeof window !== 'undefined') {
+    // Clear all auth-related data
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    // Clear all cached API data
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('api_cache_')) {
+        localStorage.removeItem(key)
+      }
+    })
     // Remove cookie
     deleteCookie('token')
+    // Force redirect to signin page
     window.location.href = '/auth/signin'
   }
 }

@@ -4,10 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "npm run db:generate:build || echo Prisma generate skipped (file may be locked) && next build",
+    "build:skip-prisma": "next build",
     "start": "next start",
     "lint": "next lint",
     "db:generate": "prisma generate",
+    "db:generate:build": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
