@@ -210,22 +210,24 @@ export default function ProjectsPage() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2 }}
+      className="h-full"
     >
-      <Card className="hover:shadow-lg transition-shadow">
-        <CardHeader>
+      <Card className="shadow-orange-500/30 hover:shadow-orange-500/50 hover:shadow-xl transition-all duration-300 h-full flex flex-col bg-gradient-to-br from-orange-600 via-amber-600 to-orange-700 border-0">
+        <CardHeader className="flex-shrink-0">
           <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <CardTitle className="text-xl">{project.name}</CardTitle>
+            <div className="flex-1 min-w-0">
+              <CardTitle className="text-xl text-white/90 line-clamp-2">{project.name}</CardTitle>
               {project.description && (
-                <CardDescription className="mt-1">{project.description}</CardDescription>
+                <CardDescription className="mt-1 text-white/80 line-clamp-2">{project.description}</CardDescription>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 ml-2">
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={() => onInvite(project)}
                 title="Invite Member"
+                className="bg-white/20 hover:bg-white/30 text-white border-0"
               >
                 <UserPlus className="h-4 w-4" />
               </Button>
@@ -233,6 +235,7 @@ export default function ProjectsPage() {
                 variant="ghost"
                 size="icon"
                 onClick={() => onEdit(project)}
+                className="bg-white/20 hover:bg-white/30 text-white border-0"
               >
                 <Edit className="h-4 w-4" />
               </Button>
@@ -240,47 +243,55 @@ export default function ProjectsPage() {
                 variant="ghost"
                 size="icon"
                 onClick={() => onDelete(project.id)}
+                className="bg-white/20 hover:bg-white/30 text-white border-0"
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2 mb-3">
-            <Badge variant={project.status === 'ACTIVE' ? 'default' : 'secondary'}>
+        <CardContent className="flex-1 flex flex-col">
+          <div className="flex flex-wrap gap-2 mb-3 flex-shrink-0">
+            <Badge 
+              variant={project.status === 'ACTIVE' ? 'default' : 'secondary'}
+              className="bg-white/20 text-white border-white/30"
+            >
               {project.status}
             </Badge>
             {project.brand && (
-              <Badge variant="outline">{project.brand}</Badge>
+              <Badge variant="outline" className="bg-white/20 text-white border-white/30">
+                {project.brand}
+              </Badge>
             )}
             {project.company && (
-              <Badge variant="outline">{project.company}</Badge>
+              <Badge variant="outline" className="bg-white/20 text-white border-white/30">
+                {project.company}
+              </Badge>
             )}
             {project._count && (
-              <Badge variant="outline">
+              <Badge variant="outline" className="bg-white/20 text-white border-white/30">
                 {project._count.tasks} tasks
               </Badge>
             )}
           </div>
-          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <div className="flex items-center gap-4 text-sm text-white mt-auto">
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="flex items-center gap-2 cursor-pointer">
                     <div className="flex -space-x-2">
                       {project.members.slice(0, 3).map((member) => (
-                        <Avatar key={member.user.id} className="w-8 h-8 border-2 border-background">
-                          <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                        <Avatar key={member.user.id} className="w-8 h-8 border-2 border-white/30">
+                          <AvatarFallback className="bg-white/20 text-white text-xs">
                             {member.user.name?.[0] || member.user.email[0].toUpperCase()}
                           </AvatarFallback>
                         </Avatar>
                       ))}
                     </div>
                     {project.members.length > 3 && (
-                      <span className="text-xs">+{project.members.length - 3}</span>
+                      <span className="text-xs text-white/90">+{project.members.length - 3}</span>
                     )}
-                    <span>{project.members.length} members</span>
+                    <span className="text-white">{project.members.length} members</span>
                   </div>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -604,13 +615,14 @@ export default function ProjectsPage() {
                           </div>
                           <div className="space-y-2 min-h-[400px]">
                             {statusProjects.map((project) => (
-                              <ProjectCard
-                                key={project.id}
-                                project={project}
-                                onEdit={openEditDialog}
-                                onDelete={handleDeleteProject}
-                                onInvite={openInviteDialog}
-                              />
+                              <div key={project.id} className="h-full">
+                                <ProjectCard
+                                  project={project}
+                                  onEdit={openEditDialog}
+                                  onDelete={handleDeleteProject}
+                                  onInvite={openInviteDialog}
+                                />
+                              </div>
                             ))}
                           </div>
                         </div>
@@ -620,7 +632,7 @@ export default function ProjectsPage() {
                 )}
 
                 {viewMode === 'grid' && (
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
                     {projects.map((project) => (
                       <ProjectCard
                         key={project.id}

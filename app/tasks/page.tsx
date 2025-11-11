@@ -412,6 +412,10 @@ export default function TasksPage() {
       await apiClient.createTask(cleanData)
       closeDialog()
       await Promise.all([fetchTasks(), fetchProjects()])
+      // Refresh notifications immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('refreshNotifications'))
+      }
     } catch (error: any) {
       console.error('Failed to create task:', error)
       alert(error.message || 'Failed to create task')
@@ -452,6 +456,10 @@ export default function TasksPage() {
       // Force refresh all task lists to ensure status updates are reflected immediately
       await fetchTasks()
       await fetchProjects()
+      // Refresh notifications immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('refreshNotifications'))
+      }
     } catch (error: any) {
       console.error('Failed to update task:', error)
       alert(error.message || 'Failed to update task')
@@ -502,6 +510,39 @@ export default function TasksPage() {
     }
   }, [])
 
+  // Listen for show task from notification event (after openCommentDialog is defined)
+  useEffect(() => {
+    const handleShowTaskFromNotification = async (event: CustomEvent) => {
+      const { taskId } = event.detail
+      if (!taskId) return
+      
+      try {
+        // Fetch the task details
+        const task = await apiClient.getTask(taskId) as Task
+        if (task) {
+          // Open comment dialog to show the task
+          await openCommentDialog(task)
+        }
+      } catch (error) {
+        console.error('Failed to fetch task from notification:', error)
+        // Try to find task in existing tasks
+        const allTasks = [...tasks, ...teamTasks, ...reviewTasks]
+        const foundTask = allTasks.find(t => t.id === taskId)
+        if (foundTask) {
+          await openCommentDialog(foundTask)
+        } else {
+          alert('Task not found. Please refresh the page.')
+        }
+      }
+    }
+    
+    window.addEventListener('showTaskFromNotification', handleShowTaskFromNotification as EventListener)
+    
+    return () => {
+      window.removeEventListener('showTaskFromNotification', handleShowTaskFromNotification as EventListener)
+    }
+  }, [openCommentDialog, tasks, teamTasks, reviewTasks])
+
   const openReviewDialog = useCallback((task: Task) => {
     setSelectedTaskForComment(task)
     setIsReviewDialogOpen(true)
@@ -536,6 +577,10 @@ export default function TasksPage() {
       setComments(taskComments as Comment[])
       // Refresh tasks
       await fetchTasks()
+      // Refresh notifications immediately (for mentions)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('refreshNotifications'))
+      }
     } catch (error: any) {
       console.error('Failed to send comment:', error)
       alert(error.message || 'Failed to send comment')
@@ -550,6 +595,10 @@ export default function TasksPage() {
       setIsReviewDialogOpen(false)
       setSelectedTaskForComment(null)
       await fetchTasks()
+      // Refresh notifications immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('refreshNotifications'))
+      }
       alert('Review requested successfully. The task has been paused and sent for review.')
     } catch (error: any) {
       console.error('Failed to request review:', error)
@@ -565,6 +614,10 @@ export default function TasksPage() {
       setIsReviewDialogOpen(false)
       setSelectedTaskForComment(null)
       await fetchTasks()
+      // Refresh notifications immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('refreshNotifications'))
+      }
       alert(`Review ${action.toLowerCase()} successfully.`)
     } catch (error: any) {
       console.error('Failed to respond to review:', error)

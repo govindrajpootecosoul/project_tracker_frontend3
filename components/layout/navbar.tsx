@@ -331,11 +331,11 @@ export function Navbar() {
       localStorage.setItem('aiButtonPosition', JSON.stringify(defaultPos))
     }
     
-    // Poll for new notifications every 30 seconds
+    // Poll for new notifications every 5 seconds for real-time updates
     const interval = setInterval(() => {
       fetchNotifications()
       fetchUnreadCount()
-    }, 30000)
+    }, 5000)
     
     // Listen for permission updates
     const handlePermissionUpdate = () => {
@@ -343,9 +343,17 @@ export function Navbar() {
     }
     window.addEventListener('userPermissionsUpdated', handlePermissionUpdate)
     
+    // Listen for notification refresh events (triggered when actions happen)
+    const handleNotificationRefresh = () => {
+      fetchNotifications()
+      fetchUnreadCount()
+    }
+    window.addEventListener('refreshNotifications', handleNotificationRefresh)
+    
     return () => {
       clearInterval(interval)
       window.removeEventListener('userPermissionsUpdated', handlePermissionUpdate)
+      window.removeEventListener('refreshNotifications', handleNotificationRefresh)
     }
   }, [loadCachedUserDetails, applyUserDetails, fetchUserDetails, fetchNotifications, fetchUnreadCount, fetchAllUsers])
 
@@ -389,13 +397,43 @@ export function Navbar() {
     }
   }
 
-  const handleNotificationClick = (notification: Notification) => {
-    if (notification.link) {
+  const handleNotificationClick = async (notification: Notification) => {
+    if (!notification.link) return
+    
+    // Extract task ID from link (format: /tasks/:taskId)
+    const taskIdMatch = notification.link.match(/\/tasks\/([a-fA-F0-9]{24})/)
+    if (taskIdMatch && taskIdMatch[1]) {
+      const taskId = taskIdMatch[1]
+      
+      // Mark notification as read
+      if (!notification.read) {
+        handleMarkAsRead(notification.id)
+      }
+      
+      // Close notification popover
+      setIsNotificationOpen(false)
+      
+      // Navigate to tasks page if not already there
+      const currentPath = window.location.pathname
+      if (!currentPath.startsWith('/tasks')) {
+        router.push('/tasks')
+        // Wait for navigation and page load, then dispatch event
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('showTaskFromNotification', { detail: { taskId } }))
+        }, 800)
+      } else {
+        // If already on tasks page, dispatch event after a short delay to ensure page is ready
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('showTaskFromNotification', { detail: { taskId } }))
+        }, 100)
+      }
+    } else {
+      // For non-task links, navigate normally
       router.push(notification.link)
       setIsNotificationOpen(false)
-    }
-    if (!notification.read) {
-      handleMarkAsRead(notification.id)
+      if (!notification.read) {
+        handleMarkAsRead(notification.id)
+      }
     }
   }
 

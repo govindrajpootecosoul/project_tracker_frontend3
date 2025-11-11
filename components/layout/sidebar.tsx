@@ -31,6 +31,7 @@ export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const [isMobileOpen, setIsMobileOpen] = useState(false)
+  const [imageError, setImageError] = useState(false)
   const [userPermissions, setUserPermissions] = useState<{
     hasCredentialAccess?: boolean
     hasSubscriptionAccess?: boolean
@@ -127,7 +128,22 @@ export function Sidebar() {
       >
         <div className="flex flex-col h-full p-4 pt-20 lg:pt-4">
           <div className="mb-8">
-            <h1 className="text-2xl font-bold">Project Tracker</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-orange-600 via-amber-600 to-orange-700 bg-clip-text text-transparent">
+                Project Hub
+              </h1>
+              <div className="relative w-12 h-12 flex-shrink-0 flex items-center justify-center">
+                <img
+                  src="/project-initiation.gif"
+                  alt="Project Hub Icon"
+                  className="w-full h-full object-contain"
+                  onError={() => {
+                    console.log('GIF not found at /project-initiation.gif')
+                    setImageError(true)
+                  }}
+                />
+              </div>
+            </div>
           </div>
           
           <nav className="flex-1 space-y-2">
@@ -144,9 +160,9 @@ export function Sidebar() {
                     router.push(item.href)
                   }}
                   className={cn(
-                    'w-full text-left flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 transform hover:translate-x-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60',
+                    'w-full text-left flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 transform hover:translate-x-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/60',
                     isActive
-                      ? 'bg-primary text-primary-foreground'
+                      ? 'bg-gradient-to-r from-orange-600 via-amber-600 to-orange-700 text-white shadow-orange-500/30'
                       : 'text-foreground hover:bg-accent hover:!text-accent-foreground'
                   )}
                   aria-current={isActive ? 'page' : undefined}
