@@ -512,8 +512,12 @@ export default function TasksPage() {
 
   // Listen for show task from notification event (after openCommentDialog is defined)
   useEffect(() => {
-    const handleShowTaskFromNotification = async (event: CustomEvent) => {
-      const { taskId } = event.detail
+    const handleShowTaskFromNotification = async (event: Event) => {
+      if (!(event instanceof CustomEvent)) {
+        return
+      }
+
+      const { taskId } = event.detail || {}
       if (!taskId) return
       
       try {
