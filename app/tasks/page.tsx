@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { MainLayout } from '@/components/layout/main-layout'
 import { apiClient } from '@/lib/api'
@@ -84,6 +84,7 @@ interface FormData {
   brand: string
   tags: string
   recurring: RecurringType | '' | 'none'
+  assigneeId: string
 }
 
 interface TeamMemberInfo {
@@ -103,6 +104,7 @@ const initialFormData: FormData = {
   brand: '',
   tags: '',
   recurring: '',
+  assigneeId: '',
 }
 
 export default function TasksPage() {
@@ -132,6 +134,10 @@ export default function TasksPage() {
   const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null)
   const [user, setUser] = useState<{ id?: string; department?: string; role?: string; name?: string; email?: string } | null>(null)
   const [activeTab, setActiveTab] = useState<string>('my')
+  const [assignableMembers, setAssignableMembers] = useState<{ id: string; name?: string; email: string; department?: string }[]>([])
+  const [assigneeSearchQuery, setAssigneeSearchQuery] = useState('')
+  const [isAssigneeDropdownOpen, setIsAssigneeDropdownOpen] = useState(false)
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const teamMemberLookup = useMemo(() => {
     const map = new Map<string, TeamMemberInfo>()
@@ -299,13 +305,35 @@ export default function TasksPage() {
     setEditingTask(null)
   }, [])
 
+  const fetchAssignableMembers = useCallback(async (search?: string) => {
+    try {
+      // Only fetch if user is admin or super admin
+      if (user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
+        const members = await apiClient.getAssignableMembers(search)
+        setAssignableMembers(members as { id: string; name?: string; email: string; department?: string }[])
+      }
+    } catch (error) {
+      console.error('Failed to fetch assignable members:', error)
+      // If error is 403, user doesn't have permission (not admin/super admin)
+      if ((error as any)?.message?.includes('403')) {
+        setAssignableMembers([])
+      }
+    }
+  }, [user?.role])
+
   const openCreateDialog = useCallback(() => {
     resetForm()
     setIsDialogOpen(true)
-  }, [resetForm])
+    // Fetch assignable members when opening dialog
+    if (user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
+      fetchAssignableMembers()
+    }
+  }, [resetForm, user?.role, fetchAssignableMembers])
 
   const openEditDialog = useCallback((task: Task) => {
     setEditingTask(task)
+    // Get the first assignee ID if available
+    const firstAssigneeId = task.assignees && task.assignees.length > 0 ? task.assignees[0].user.id : ''
     setFormData({
       title: task.title,
       description: task.description || '',
@@ -316,13 +344,42 @@ export default function TasksPage() {
       brand: task.brand || '',
       tags: task.tags || '',
       recurring: task.recurring || '',
+      assigneeId: firstAssigneeId,
     })
     setIsDialogOpen(true)
-  }, [])
+    // Fetch assignable members when opening dialog
+    if (user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
+      fetchAssignableMembers().then(() => {
+        // If there's an assignee, ensure it's in the list
+        if (firstAssigneeId && task.assignees && task.assignees.length > 0) {
+          const assignee = task.assignees[0].user
+          setAssignableMembers(prev => {
+            // Check if assignee is already in the list
+            const exists = prev.some(m => m.id === assignee.id)
+            if (!exists) {
+              return [...prev, {
+                id: assignee.id,
+                name: assignee.name,
+                email: assignee.email,
+              }]
+            }
+            return prev
+          })
+        }
+      })
+    }
+  }, [user?.role, fetchAssignableMembers])
 
   const closeDialog = useCallback(() => {
     setIsDialogOpen(false)
     resetForm()
+    setAssigneeSearchQuery('')
+    setIsAssigneeDropdownOpen(false)
+    // Clear search timeout
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current)
+      searchTimeoutRef.current = null
+    }
   }, [resetForm])
 
   const handleCreateTask = useCallback(async () => {
@@ -332,7 +389,7 @@ export default function TasksPage() {
         return
       }
 
-      const cleanData = {
+      const cleanData: any = {
         title: formData.title.trim(),
         description: formData.description?.trim() || null,
         status: formData.status,
@@ -344,7 +401,12 @@ export default function TasksPage() {
         recurring: formData.recurring && formData.recurring !== 'none' && formData.recurring.trim() !== '' 
           ? formData.recurring 
           : null,
-        assignees: [],
+      }
+
+      // Add assignees if assigneeId is provided and user is admin/super admin
+      if (formData.assigneeId && formData.assigneeId.trim() !== '' && 
+          user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
+        cleanData.assignees = [formData.assigneeId.trim()]
       }
 
       await apiClient.createTask(cleanData)
@@ -354,7 +416,7 @@ export default function TasksPage() {
       console.error('Failed to create task:', error)
       alert(error.message || 'Failed to create task')
     }
-  }, [formData, closeDialog, fetchTasks, fetchProjects])
+  }, [formData, closeDialog, fetchTasks, fetchProjects, user?.role])
 
   const handleUpdateTask = useCallback(async () => {
     if (!editingTask) return
@@ -365,7 +427,7 @@ export default function TasksPage() {
         return
       }
 
-      const cleanData = {
+      const cleanData: any = {
         title: formData.title.trim(),
         description: formData.description?.trim() || null,
         status: formData.status,
@@ -377,7 +439,12 @@ export default function TasksPage() {
         recurring: formData.recurring && formData.recurring !== 'none' && formData.recurring.trim() !== '' 
           ? formData.recurring 
           : null,
-        assignees: [],
+      }
+
+      // Add assignees if assigneeId is provided and user is admin/super admin
+      if (formData.assigneeId && formData.assigneeId.trim() !== '' && 
+          user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
+        cleanData.assignees = [formData.assigneeId.trim()]
       }
 
       await apiClient.updateTask(editingTask.id, cleanData)
@@ -389,7 +456,7 @@ export default function TasksPage() {
       console.error('Failed to update task:', error)
       alert(error.message || 'Failed to update task')
     }
-  }, [editingTask, formData, closeDialog, fetchTasks, fetchProjects])
+  }, [editingTask, formData, closeDialog, fetchTasks, fetchProjects, user?.role])
 
   const handleDeleteTask = useCallback(async (taskId: string) => {
     if (!confirm('Are you sure you want to delete this task?')) return
@@ -644,14 +711,15 @@ export default function TasksPage() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2 }}
+      className="h-full"
     >
-      <Card className="hover:shadow-lg transition-shadow">
-        <CardHeader>
+      <Card className="hover:shadow-lg transition-shadow h-full flex flex-col min-h-[280px]">
+        <CardHeader className="flex-shrink-0">
           <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <CardTitle className="text-lg">{task.title}</CardTitle>
+            <div className="flex-1 min-w-0">
+              <CardTitle className="text-lg line-clamp-2">{task.title}</CardTitle>
               {task.description && (
-                <p className="text-sm text-muted-foreground mt-1">{task.description}</p>
+                <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{task.description}</p>
               )}
             </div>
             <div className="flex gap-2">
@@ -714,8 +782,8 @@ export default function TasksPage() {
             </div>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2 mb-3">
+        <CardContent className="flex-1 flex flex-col">
+          <div className="flex flex-wrap gap-2 mb-3 flex-shrink-0">
             <Popover>
               <PopoverTrigger asChild>
                 <Badge className={`${getStatusBadgeColor(task.status)} cursor-pointer hover:opacity-80 transition-opacity`}>
@@ -772,7 +840,7 @@ export default function TasksPage() {
               <Badge variant="outline">{task.recurring}</Badge>
             )}
           </div>
-          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <div className="flex items-center gap-4 text-sm text-muted-foreground flex-shrink-0 mb-3">
             {task.dueDate && (
               <div className="flex items-center gap-1">
                 <Calendar className="h-4 w-4" />
@@ -780,12 +848,12 @@ export default function TasksPage() {
               </div>
             )}
             {task.assignees.length > 0 && (
-              <div>
+              <div className="truncate">
                 Assigned to: {task.assignees.map(a => a.user.name || a.user.email).join(', ')}
               </div>
             )}
           </div>
-          <div className="flex gap-2 mt-4">
+          <div className="flex gap-2 mt-auto">
             <Button
               variant="outline"
               size="sm"
@@ -1067,7 +1135,7 @@ export default function TasksPage() {
 
     // Grid view (default)
     return (
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
         {filteredAndSorted.map((task) => (
           <TaskCard key={task.id} task={task} />
         ))}
@@ -1569,6 +1637,122 @@ export default function TasksPage() {
                   placeholder="Comma-separated tags"
                 />
               </div>
+
+              {/* Assignee field - only for admin and super admin */}
+              {user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') && (
+                <div>
+                  <Label htmlFor="assignee">Assign Task To (Optional)</Label>
+                  <Popover 
+                    open={isAssigneeDropdownOpen} 
+                    onOpenChange={(open) => {
+                      setIsAssigneeDropdownOpen(open)
+                      if (!open) {
+                        // Reset search when closing
+                        setAssigneeSearchQuery('')
+                        // Clear timeout
+                        if (searchTimeoutRef.current) {
+                          clearTimeout(searchTimeoutRef.current)
+                          searchTimeoutRef.current = null
+                        }
+                        // Reload full list when closing
+                        if (user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
+                          fetchAssignableMembers()
+                        }
+                      }
+                    }}
+                  >
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start text-left font-normal"
+                        onClick={() => {
+                          setIsAssigneeDropdownOpen(true)
+                          if (assignableMembers.length === 0) {
+                            fetchAssignableMembers()
+                          }
+                        }}
+                      >
+                        {formData.assigneeId
+                          ? (() => {
+                              const selected = assignableMembers.find(m => m.id === formData.assigneeId)
+                              return selected ? (selected.name || selected.email) : 'Select assignee...'
+                            })()
+                          : 'Select assignee...'}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-full p-0" align="start">
+                      <div className="p-2">
+                        <Input
+                          placeholder="Search by name or email..."
+                          value={assigneeSearchQuery}
+                          onChange={(e) => {
+                            const query = e.target.value
+                            setAssigneeSearchQuery(query)
+                            
+                            // Clear existing timeout
+                            if (searchTimeoutRef.current) {
+                              clearTimeout(searchTimeoutRef.current)
+                            }
+                            
+                            // Set new timeout for debounced search
+                            searchTimeoutRef.current = setTimeout(() => {
+                              fetchAssignableMembers(query)
+                            }, 300)
+                          }}
+                          className="mb-2"
+                        />
+                        <div className="max-h-60 overflow-y-auto">
+                          {assignableMembers.length === 0 ? (
+                            <div className="p-2 text-sm text-muted-foreground text-center">
+                              {assigneeSearchQuery ? 'No members found' : 'Loading...'}
+                            </div>
+                          ) : (
+                            assignableMembers.map((member) => (
+                              <div
+                                key={member.id}
+                                className="p-2 hover:bg-accent cursor-pointer rounded-sm"
+                                onClick={() => {
+                                  updateFormField('assigneeId', member.id)
+                                  setIsAssigneeDropdownOpen(false)
+                                  setAssigneeSearchQuery('')
+                                }}
+                              >
+                                <div className="font-medium text-sm">{member.name || member.email}</div>
+                                {member.name && (
+                                  <div className="text-xs text-muted-foreground">{member.email}</div>
+                                )}
+                                {member.department && (
+                                  <div className="text-xs text-muted-foreground">Dept: {member.department}</div>
+                                )}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                        {formData.assigneeId && (
+                          <div className="mt-2 pt-2 border-t">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-full text-xs"
+                              onClick={() => {
+                                updateFormField('assigneeId', '')
+                                setIsAssigneeDropdownOpen(false)
+                              }}
+                            >
+                              Clear Selection
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {user.role === 'ADMIN' 
+                      ? 'Assign task to a member from your department'
+                      : 'Assign task to any member'}
+                  </p>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2">
                 <Button

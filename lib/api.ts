@@ -256,6 +256,13 @@ class ApiClient {
     return this.request(`/tasks/${id}`)
   }
 
+  async getAssignableMembers(search?: string) {
+    const queryParams = new URLSearchParams()
+    if (search) queryParams.append('search', search)
+    const query = queryParams.toString()
+    return this.request(`/tasks/assignable-members${query ? `?${query}` : ''}`)
+  }
+
   async createTask(data: any) {
     const result = await this.request('/tasks', {
       method: 'POST',

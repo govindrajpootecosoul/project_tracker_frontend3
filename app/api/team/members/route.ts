@@ -43,11 +43,18 @@ export async function GET(request: NextRequest) {
       userIds.map(async (userId) => {
         const tasks = await prisma.task.findMany({
           where: {
-            assignees: {
-              some: {
-                userId,
+            OR: [
+              {
+                assignees: {
+                  some: {
+                    userId,
+                  },
+                },
               },
-            },
+              {
+                createdById: userId,
+              },
+            ],
           },
         })
 
