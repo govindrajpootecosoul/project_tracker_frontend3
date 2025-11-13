@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npm run db:generate:build || echo Prisma generate skipped (file may be locked) && next build",
+    "build": "npm run db:generate:build || echo \"Prisma generate skipped (file may be locked)\" && next build",
     "build:skip-prisma": "next build",
     "start": "next start",
     "lint": "next lint",

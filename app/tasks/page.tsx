@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { motion } from 'framer-motion'
 import { Plus, Edit, Trash2, MessageSquare, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, Users, X } from 'lucide-react'
 import { format } from 'date-fns'
+import type { TaskComment } from '@/types/comments'
 
 type TaskStatus = 'IN_PROGRESS' | 'COMPLETED' | 'YTS' | 'ON_HOLD' | 'RECURRING'
 type TaskPriority = 'HIGH' | 'MEDIUM' | 'LOW'
@@ -50,22 +51,7 @@ interface Task {
     name: string
     brand?: string
   } | null
-  comments?: Comment[]
-}
-
-interface Comment {
-  id: string
-  content: string
-  taskId: string
-  userId: string
-  mentions?: string | null
-  createdAt: string
-  updatedAt: string
-  user: {
-    id: string
-    name?: string
-    email: string
-  }
+  comments?: TaskComment[]
 }
 
 interface Project {
@@ -122,7 +108,7 @@ export default function TasksPage() {
   const [isCommentDialogOpen, setIsCommentDialogOpen] = useState(false)
   const [isReviewDialogOpen, setIsReviewDialogOpen] = useState(false)
   const [selectedTaskForComment, setSelectedTaskForComment] = useState<Task | null>(null)
-  const [comments, setComments] = useState<Comment[]>([])
+  const [comments, setComments] = useState<TaskComment[]>([])
   const [commentText, setCommentText] = useState('')
   const [mentionQuery, setMentionQuery] = useState('')
   const [showMentions, setShowMentions] = useState(false)
@@ -579,7 +565,7 @@ export default function TasksPage() {
     setCommentText('')
     try {
       const taskComments = await apiClient.getTaskComments(task.id)
-      setComments(taskComments as Comment[])
+      setComments(taskComments)
       lastCommentCountRef.current = taskComments.length
       // Scroll to bottom when opening
       setTimeout(() => {
@@ -610,7 +596,7 @@ export default function TasksPage() {
             ? commentsContainerRef.current.scrollHeight - commentsContainerRef.current.scrollTop <= commentsContainerRef.current.clientHeight + 50
             : true
           
-          setComments(taskComments as Comment[])
+          setComments(taskComments)
           lastCommentCountRef.current = newCount
           
           // Auto-scroll to bottom if user was already at bottom (new comment arrived)
@@ -706,7 +692,7 @@ export default function TasksPage() {
       setCommentText('')
       // Refresh comments
       const taskComments = await apiClient.getTaskComments(selectedTaskForComment.id)
-      setComments(taskComments as Comment[])
+        setComments(taskComments)
       lastCommentCountRef.current = taskComments.length
       // Scroll to bottom after sending comment
       setTimeout(() => {

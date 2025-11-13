@@ -1,3 +1,5 @@
+import type { TaskComment } from '@/types/comments'
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'
 const CACHE_PREFIX = 'api_cache_'
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
@@ -612,7 +614,7 @@ class ApiClient {
 
   // Comments
   async getTaskComments(taskId: string) {
-    return this.request(`/tasks/${taskId}/comments`)
+    return this.request<TaskComment[]>(`/tasks/${taskId}/comments`)
   }
 
   async createComment(taskId: string, content: string, mentions?: string[]) {
