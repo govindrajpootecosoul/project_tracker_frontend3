@@ -110,7 +110,9 @@ export async function GET(request: NextRequest) {
         select: { projectId: true },
       })
 
-      projectIds = [...new Set(departmentProjects.map(p => p.projectId))]
+      projectIds = departmentProjects
+        .map(p => p.projectId)
+        .filter((projectId, index, arr) => arr.indexOf(projectId) === index)
     } else if (view === 'all-departments') {
       // All departments activities - only for super admin
       if (!isSuperAdmin) {
