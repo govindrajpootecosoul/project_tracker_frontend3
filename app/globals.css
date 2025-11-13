@@ -103,3 +103,26 @@
   }
 }
 
+/* Auto-scroll animation for in-progress tasks */
+@keyframes scrollLoop {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-50%);
+  }
+}
+
+/* Remove grey background from Recharts */
+.recharts-wrapper,
+.recharts-surface,
+.recharts-cartesian-grid,
+.recharts-cartesian-grid-horizontal,
+.recharts-cartesian-grid-vertical {
+  background: transparent !important;
+}
+
+.recharts-wrapper svg {
+  background: transparent !important;
+}
+

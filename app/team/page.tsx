@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { motion } from 'framer-motion'
-import { Mail, Send, Users, CheckCircle2, Clock, AlertCircle, UserPlus, Search, Filter, Key, CreditCard, Power, PowerOff, Loader2 } from 'lucide-react'
+import { Mail, Send, CheckCircle2, Clock, AlertCircle, UserPlus, Search, Pencil, Trash2, Loader2 } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 
@@ -30,7 +30,10 @@ interface TeamMember {
     inProgress: number
     completed: number
     onHold: number
+    yts?: number
+    recurring?: number
   }
+  role: string
   credentialMembers?: {
     id: string
     credentialId: string
@@ -43,6 +46,26 @@ interface TeamMember {
     subscriptionName: string
     isActive: boolean
   }[]
+}
+
+type MemberRoleOption = 'USER' | 'ADMIN' | 'SUPER_ADMIN'
+
+const normalizeRoleForSelect = (role?: string): MemberRoleOption => {
+  if (!role) return 'USER'
+  const upper = role.toUpperCase().replace(/-/g, '_')
+  if (upper === 'SUPERADMIN') return 'SUPER_ADMIN'
+  if (upper === 'SUPER_ADMIN') return 'SUPER_ADMIN'
+  if (upper === 'ADMIN') return 'ADMIN'
+  return 'USER'
+}
+
+const formatRoleLabel = (role?: string) => {
+  const labels: Record<MemberRoleOption, string> = {
+    USER: 'User',
+    ADMIN: 'Admin',
+    SUPER_ADMIN: 'Super Admin',
+  }
+  return labels[normalizeRoleForSelect(role)]
 }
 
 const TEAM_MEMBERS_CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
@@ -76,9 +99,23 @@ export default function TeamPage() {
     body: '',
   })
   const [includeDepartmentTasks, setIncludeDepartmentTasks] = useState(false)
+  const [currentUserId, setCurrentUserId] = useState<string>('')
+  const [departmentTaskCounts, setDepartmentTaskCounts] = useState<{ employees: number; tasks: number } | null>(null)
+  const [isSendingEmail, setIsSendingEmail] = useState(false)
+  const [onLeaveMembers, setOnLeaveMembers] = useState<string[]>([]) // Array of user IDs on leave
+  const [departmentMembersForLeave, setDepartmentMembersForLeave] = useState<TeamMember[]>([])
+  const [isDepartmentMembersLoading, setIsDepartmentMembersLoading] = useState(false)
+  const [leaveMemberSearch, setLeaveMemberSearch] = useState<string>('') // Search filter for leave members
+  const [activeTab, setActiveTab] = useState<string>('team')
+  const [isRoleDialogOpen, setIsRoleDialogOpen] = useState(false)
+  const [selectedMemberForRole, setSelectedMemberForRole] = useState<TeamMember | null>(null)
+  const [roleSelection, setRoleSelection] = useState<MemberRoleOption>('USER')
+  const [roleSaving, setRoleSaving] = useState(false)
   
   // Debounce timer ref
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const departmentMembersCacheRef = useRef<Record<string, TeamMember[]>>({})
+  const departmentMembersInFlightRef = useRef<Record<string, Promise<TeamMember[]>>>({})
 
   useEffect(() => {
     const token = getToken()
@@ -114,6 +151,7 @@ export default function TeamPage() {
       const user = await apiClient.getUserRole()
       setUserRole(user.role || 'USER')
       setUserDepartment(user.department || '')
+      setCurrentUserId(user.id || '')
       // Set default department filter to user's department if not super admin
       const roleUpper = (user.role || '').toUpperCase()
       if (roleUpper !== 'SUPER_ADMIN' && user.department) {
@@ -226,6 +264,82 @@ export default function TeamPage() {
     }
   }, [searchQuery])
 
+  const applyDepartmentMembersForLeave = useCallback((members: TeamMember[]) => {
+    setDepartmentMembersForLeave(members)
+    if (members.length === 0) {
+      setOnLeaveMembers([])
+      return
+    }
+    setOnLeaveMembers((prev) => prev.filter((id) => members.some((member) => member.id === id)))
+  }, [])
+
+  const refreshDepartmentMembers = useCallback((department: string, showLoading: boolean = false): Promise<TeamMember[]> => {
+    if (!department) {
+      applyDepartmentMembersForLeave([])
+      return Promise.resolve([])
+    }
+
+    const cacheKey = department.toLowerCase()
+    const inFlight = departmentMembersInFlightRef.current[cacheKey]
+    if (inFlight) {
+      return inFlight
+    }
+
+    if (showLoading) {
+      setIsDepartmentMembersLoading(true)
+    }
+
+    const fetchPromise = apiClient
+      .getTeamMembers({ department }, true)
+      .then((data) => {
+        const members = (data as TeamMember[]) || []
+        departmentMembersCacheRef.current[cacheKey] = members
+        applyDepartmentMembersForLeave(members)
+        return members
+      })
+      .catch((error) => {
+        console.error('Failed to fetch department members:', error)
+        if (showLoading) {
+          applyDepartmentMembersForLeave([])
+        }
+        return []
+      })
+      .finally(() => {
+        if (showLoading) {
+          setIsDepartmentMembersLoading(false)
+        }
+        delete departmentMembersInFlightRef.current[cacheKey]
+      })
+
+    departmentMembersInFlightRef.current[cacheKey] = fetchPromise
+    return fetchPromise
+  }, [applyDepartmentMembersForLeave])
+
+  const loadDepartmentMembersForLeave = useCallback(async (department: string): Promise<TeamMember[]> => {
+    if (!department) {
+      applyDepartmentMembersForLeave([])
+      return []
+    }
+
+    const cacheKey = department.toLowerCase()
+    const cachedMembers = departmentMembersCacheRef.current[cacheKey]
+    if (cachedMembers) {
+      applyDepartmentMembersForLeave(cachedMembers)
+      refreshDepartmentMembers(department)
+      return cachedMembers
+    }
+
+    const fallbackMembers = teamMembers.filter((member) => (member.department || '').toLowerCase() === cacheKey)
+    if (fallbackMembers.length > 0) {
+      departmentMembersCacheRef.current[cacheKey] = fallbackMembers
+      applyDepartmentMembersForLeave(fallbackMembers)
+      refreshDepartmentMembers(department)
+      return fallbackMembers
+    }
+
+    return refreshDepartmentMembers(department, true)
+  }, [teamMembers, applyDepartmentMembersForLeave, refreshDepartmentMembers])
+
   // Fetch data when search query or department changes
   useEffect(() => {
     if (userRole && userDepartment !== undefined) {
@@ -250,125 +364,129 @@ export default function TeamPage() {
       alert('Please enter a recipient email address')
       return
     }
-    if (!emailForm.subject || !emailForm.subject.trim()) {
+    // Subject is required unless includeDepartmentTasks is checked (backend will auto-generate)
+    if (!includeDepartmentTasks && (!emailForm.subject || !emailForm.subject.trim())) {
       alert('Please enter an email subject')
       return
     }
-    if (!emailForm.body || !emailForm.body.trim()) {
-      alert('Please enter an email body')
-      return
-    }
+
+    setIsSendingEmail(true)
 
     try {
-      // Prepare email data - handle empty cc field
+      // Parse multiple emails (comma or semicolon separated)
+      const parseEmails = (emailString: string): string[] => {
+        return emailString
+          .split(/[,;]/)
+          .map(email => email.trim())
+          .filter(email => email.length > 0)
+      }
+
+      // Prepare email data
       const emailData = {
-        to: emailForm.to.trim(),
-        subject: emailForm.subject.trim(),
-        body: emailForm.body.trim(),
+        to: parseEmails(emailForm.to.trim()),
+        subject: emailForm.subject.trim() || (includeDepartmentTasks ? 'Department Tasks Report' : ''),
+        body: emailForm.body.trim() || '', // Body is optional now
         includeDepartmentTasks: includeDepartmentTasks,
-        ...(emailForm.cc && emailForm.cc.trim() && { cc: emailForm.cc.trim() }),
+        onLeaveMemberIds: onLeaveMembers, // Send on leave member IDs
+        ...(emailForm.cc && emailForm.cc.trim() && { cc: parseEmails(emailForm.cc.trim()) }),
       }
       
       await apiClient.sendEmail(emailData)
       setIsEmailDialogOpen(false)
+      setActiveTab('team') // Navigate back to Team Overview after sending email
       setEmailForm({ to: '', cc: '', subject: '', body: '' })
       setIncludeDepartmentTasks(false)
+      setDepartmentTaskCounts(null)
+      setOnLeaveMembers([])
+      setDepartmentMembersForLeave([])
       alert('Email sent successfully!')
     } catch (error: any) {
       console.error('Failed to send email:', error)
       alert(error.message || 'Failed to send email')
+    } finally {
+      setIsSendingEmail(false)
     }
   }
 
-  const handleToggleCredentialActive = async (credentialId: string, memberId: string, isActive: boolean) => {
+  const handleRoleDialogOpenChange = (open: boolean) => {
+    setIsRoleDialogOpen(open)
+    if (!open) {
+      setSelectedMemberForRole(null)
+      setRoleSaving(false)
+    }
+  }
+
+  const openRoleDialog = (member: TeamMember) => {
+    // Only super admin can edit super admin roles
+    if (normalizeRoleForSelect(member.role) === 'SUPER_ADMIN' && !isSuperAdmin) {
+      alert('Only super admins can edit another super admin.')
+      return
+    }
+    setSelectedMemberForRole(member)
+    setRoleSelection(normalizeRoleForSelect(member.role))
+    setIsRoleDialogOpen(true)
+  }
+
+  const handleUpdateRole = async () => {
+    if (!selectedMemberForRole) return
+    
+    // Only super admin can assign SUPER_ADMIN role
+    if (roleSelection === 'SUPER_ADMIN' && !isSuperAdmin) {
+      alert('Only super admins can assign the SUPER_ADMIN role.')
+      return
+    }
+    
+    // Only super admin can change super admin's role
+    if (normalizeRoleForSelect(selectedMemberForRole.role) === 'SUPER_ADMIN' && !isSuperAdmin) {
+      alert('Only super admins can modify another super admin\'s role.')
+      return
+    }
+    
+    setRoleSaving(true)
     try {
-      await apiClient.toggleCredentialMemberActive(credentialId, memberId, !isActive)
+      await apiClient.updateMemberRole(selectedMemberForRole.id, roleSelection)
       await fetchTeamMembers({ force: true })
+      handleRoleDialogOpenChange(false)
+      alert('Role updated successfully!')
     } catch (error: any) {
-      console.error('Failed to toggle credential status:', error)
-      alert(error.message || 'Failed to update credential status')
+      console.error('Failed to update member role:', error)
+      alert(error.message || 'Failed to update member role')
+    } finally {
+      setRoleSaving(false)
     }
   }
 
-  const handleToggleSubscriptionActive = async (subscriptionId: string, memberId: string, isActive: boolean) => {
-    try {
-      await apiClient.toggleSubscriptionMemberActive(subscriptionId, memberId, !isActive)
-      await fetchTeamMembers({ force: true })
-    } catch (error: any) {
-      console.error('Failed to toggle subscription status:', error)
-      alert(error.message || 'Failed to update subscription status')
+  const handleDeactivateMember = async (member: TeamMember) => {
+    if (normalizeRoleForSelect(member.role) === 'SUPER_ADMIN' && !isSuperAdmin) {
+      alert('Only super admins can deactivate another super admin.')
+      return
     }
-  }
 
-  const handleToggleCredentialAccess = async (memberId: string, currentValue: boolean) => {
+    if (member.id === currentUserId) {
+      alert('You cannot deactivate your own account.')
+      return
+    }
+
+    let confirmed = true
+    if (typeof window !== 'undefined') {
+      confirmed = window.confirm(
+        `Are you sure you want to delete ${member.name || member.email}? They will lose access to the workspace.`
+      )
+    }
+    if (!confirmed) {
+      return
+    }
+
     try {
-      await apiClient.updateMemberFeatures(memberId, !currentValue, undefined)
-      await fetchTeamMembers({ force: true })
-      // If updating own access, refresh user details and sidebar
-      const token = getToken()
-      if (token && typeof window !== 'undefined') {
-        const userStr = localStorage.getItem('user')
-        if (userStr) {
-          try {
-            const parsedUser = JSON.parse(userStr)
-            if (parsedUser.id === memberId) {
-              // Refresh user details to update sidebar and profile
-              const updatedUser = await apiClient.getUserRole(false)
-              localStorage.setItem('user', JSON.stringify({
-                ...parsedUser,
-                hasCredentialAccess: updatedUser.hasCredentialAccess,
-              }))
-              // Dispatch custom event to refresh sidebar
-              window.dispatchEvent(new CustomEvent('userPermissionsUpdated'))
-              // Refresh user details in navbar
-              setTimeout(() => {
-                window.location.reload()
-              }, 500)
-            }
-          } catch (e) {
-            // Ignore
-          }
-        }
+      await apiClient.deactivateMember(member.id)
+      if (selectedMemberForRole?.id === member.id) {
+        handleRoleDialogOpenChange(false)
       }
-    } catch (error: any) {
-      console.error('Failed to toggle credential access:', error)
-      alert(error.message || 'Failed to update credential access')
-    }
-  }
-
-  const handleToggleSubscriptionAccess = async (memberId: string, currentValue: boolean) => {
-    try {
-      await apiClient.updateMemberFeatures(memberId, undefined, !currentValue)
       await fetchTeamMembers({ force: true })
-      // If updating own access, refresh user details and sidebar
-      const token = getToken()
-      if (token && typeof window !== 'undefined') {
-        const userStr = localStorage.getItem('user')
-        if (userStr) {
-          try {
-            const parsedUser = JSON.parse(userStr)
-            if (parsedUser.id === memberId) {
-              // Refresh user details to update sidebar and profile
-              const updatedUser = await apiClient.getUserRole(false)
-              localStorage.setItem('user', JSON.stringify({
-                ...parsedUser,
-                hasSubscriptionAccess: updatedUser.hasSubscriptionAccess,
-              }))
-              // Dispatch custom event to refresh sidebar
-              window.dispatchEvent(new CustomEvent('userPermissionsUpdated'))
-              // Refresh user details in navbar
-              setTimeout(() => {
-                window.location.reload()
-              }, 500)
-            }
-          } catch (e) {
-            // Ignore
-          }
-        }
-      }
+      alert('Team member deleted successfully.')
     } catch (error: any) {
-      console.error('Failed to toggle subscription access:', error)
-      alert(error.message || 'Failed to update subscription access')
+      console.error('Failed to deactivate member:', error)
+      alert(error.message || 'Failed to deactivate member')
     }
   }
 
@@ -447,7 +565,12 @@ export default function TeamPage() {
           </Dialog>
         </div>
 
-        <Tabs defaultValue="team" className="space-y-4">
+        <Tabs value={activeTab} onValueChange={(value) => {
+          setActiveTab(value)
+          if (value === 'email') {
+            setIsEmailDialogOpen(true)
+          }
+        }} className="space-y-4">
           <TabsList>
             <TabsTrigger value="team">Team Overview</TabsTrigger>
             <TabsTrigger value="email">Send Email</TabsTrigger>
@@ -551,17 +674,13 @@ export default function TeamPage() {
                           <tr className="border-b">
                             <th className="text-left p-4">Team Member</th>
                             <th className="text-left p-4">Department</th>
+                            <th className="text-left p-4">Role</th>
                             <th className="text-left p-4">Tasks Assigned</th>
                             <th className="text-left p-4">Projects Involved</th>
                             <th className="text-left p-4">Status Summary</th>
-                            {isAdmin && (
-                              <>
-                                <th className="text-left p-4">Credential Access</th>
-                                <th className="text-left p-4">Subscription Access</th>
-                                <th className="text-left p-4">Credentials</th>
-                                <th className="text-left p-4">Subscriptions</th>
-                              </>
-                            )}
+                            <th className="text-left p-4">Credential Access</th>
+                            <th className="text-left p-4">Subscription Access</th>
+                            {isAdmin && <th className="text-left p-4">Actions</th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -586,6 +705,9 @@ export default function TeamPage() {
                                   <span className="text-muted-foreground">-</span>
                                 )}
                               </td>
+                              <td className="p-4">
+                                <Badge variant="secondary">{formatRoleLabel(member.role)}</Badge>
+                              </td>
                               <td className="p-4">{member.tasksAssigned}</td>
                               <td className="p-4">{member.projectsInvolved}</td>
                               <td className="p-4">
@@ -604,83 +726,106 @@ export default function TeamPage() {
                                   </Badge>
                                 </div>
                               </td>
+                              <td className="p-4">
+                                {isAdmin ? (
+                                  <div className="flex items-center gap-2">
+                                    <Switch
+                                      checked={member.hasCredentialAccess || false}
+                                      onCheckedChange={async (checked) => {
+                                        try {
+                                          await apiClient.updateMemberFeatures(member.id, checked, undefined)
+                                          await fetchTeamMembers({ force: true })
+                                        } catch (error: any) {
+                                          console.error('Failed to update credential access:', error)
+                                          alert(error.message || 'Failed to update credential access')
+                                        }
+                                      }}
+                                      disabled={member.id === currentUserId}
+                                    />
+                                    <span className="text-sm text-muted-foreground">
+                                      {member.hasCredentialAccess ? 'Yes' : 'No'}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  member.hasCredentialAccess ? (
+                                    <Badge variant="default" className="bg-green-600">
+                                      <CheckCircle2 className="h-3 w-3 mr-1" />
+                                      Yes
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="text-muted-foreground">
+                                      No
+                                    </Badge>
+                                  )
+                                )}
+                              </td>
+                              <td className="p-4">
+                                {isAdmin ? (
+                                  <div className="flex items-center gap-2">
+                                    <Switch
+                                      checked={member.hasSubscriptionAccess || false}
+                                      onCheckedChange={async (checked) => {
+                                        try {
+                                          await apiClient.updateMemberFeatures(member.id, undefined, checked)
+                                          await fetchTeamMembers({ force: true })
+                                        } catch (error: any) {
+                                          console.error('Failed to update subscription access:', error)
+                                          alert(error.message || 'Failed to update subscription access')
+                                        }
+                                      }}
+                                      disabled={member.id === currentUserId}
+                                    />
+                                    <span className="text-sm text-muted-foreground">
+                                      {member.hasSubscriptionAccess ? 'Yes' : 'No'}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  member.hasSubscriptionAccess ? (
+                                    <Badge variant="default" className="bg-green-600">
+                                      <CheckCircle2 className="h-3 w-3 mr-1" />
+                                      Yes
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="text-muted-foreground">
+                                      No
+                                    </Badge>
+                                  )
+                                )}
+                              </td>
                               {isAdmin && (
-                                <>
-                                  <td className="p-4">
-                                    <div className="flex items-center gap-2">
-                                      <Switch
-                                        checked={member.hasCredentialAccess || false}
-                                        onCheckedChange={() => handleToggleCredentialAccess(member.id, member.hasCredentialAccess || false)}
-                                      />
-                                      <span className="text-sm text-muted-foreground">
-                                        {member.hasCredentialAccess ? 'Enabled' : 'Disabled'}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="p-4">
-                                    <div className="flex items-center gap-2">
-                                      <Switch
-                                        checked={member.hasSubscriptionAccess || false}
-                                        onCheckedChange={() => handleToggleSubscriptionAccess(member.id, member.hasSubscriptionAccess || false)}
-                                      />
-                                      <span className="text-sm text-muted-foreground">
-                                        {member.hasSubscriptionAccess ? 'Enabled' : 'Disabled'}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="p-4">
-                                    {member.credentialMembers && member.credentialMembers.length > 0 ? (
-                                      <div className="space-y-1">
-                                        {member.credentialMembers.map((cm) => (
-                                          <div key={cm.id} className="flex items-center gap-2">
-                                            <span className="text-sm">{cm.credentialName}</span>
-                                            <Button
-                                              variant="ghost"
-                                              size="icon"
-                                              className="h-6 w-6"
-                                              onClick={() => handleToggleCredentialActive(cm.credentialId, cm.id, cm.isActive)}
-                                              title={cm.isActive ? 'Deactivate' : 'Activate'}
-                                            >
-                                              {cm.isActive ? (
-                                                <Power className="h-3 w-3 text-green-600" />
-                                              ) : (
-                                                <PowerOff className="h-3 w-3 text-red-600" />
-                                              )}
-                                            </Button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    ) : (
-                                      <span className="text-muted-foreground text-sm">-</span>
+                                <td className="p-4">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {/* Edit button - only show if user is not SUPER_ADMIN or current user is SUPER_ADMIN */}
+                                    {(!isSuperAdmin && normalizeRoleForSelect(member.role) === 'SUPER_ADMIN') ? null : (
+                                      <Button variant="outline" size="sm" onClick={() => openRoleDialog(member)}>
+                                        <Pencil className="h-4 w-4 mr-1" />
+                                        Edit
+                                      </Button>
                                     )}
-                                  </td>
-                                  <td className="p-4">
-                                    {member.subscriptionMembers && member.subscriptionMembers.length > 0 ? (
-                                      <div className="space-y-1">
-                                        {member.subscriptionMembers.map((sm) => (
-                                          <div key={sm.id} className="flex items-center gap-2">
-                                            <span className="text-sm">{sm.subscriptionName}</span>
-                                            <Button
-                                              variant="ghost"
-                                              size="icon"
-                                              className="h-6 w-6"
-                                              onClick={() => handleToggleSubscriptionActive(sm.subscriptionId, sm.id, sm.isActive)}
-                                              title={sm.isActive ? 'Deactivate' : 'Activate'}
-                                            >
-                                              {sm.isActive ? (
-                                                <Power className="h-3 w-3 text-green-600" />
-                                              ) : (
-                                                <PowerOff className="h-3 w-3 text-red-600" />
-                                              )}
-                                            </Button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    ) : (
-                                      <span className="text-muted-foreground text-sm">-</span>
+                                    {/* Delete button - only SUPER_ADMIN can delete SUPER_ADMIN */}
+                                    {normalizeRoleForSelect(member.role) === 'SUPER_ADMIN' && !isSuperAdmin ? null : (
+                                      <Button
+                                        variant="destructive"
+                                        size="sm"
+                                        onClick={() => handleDeactivateMember(member)}
+                                        disabled={
+                                          member.id === currentUserId ||
+                                          (!isSuperAdmin && normalizeRoleForSelect(member.role) === 'SUPER_ADMIN')
+                                        }
+                                        title={
+                                          member.id === currentUserId
+                                            ? 'You cannot delete your own account'
+                                            : !isSuperAdmin && normalizeRoleForSelect(member.role) === 'SUPER_ADMIN'
+                                              ? 'Only super admins can delete another super admin'
+                                              : 'Delete team member'
+                                        }
+                                      >
+                                        <Trash2 className="h-4 w-4 mr-1" />
+                                        Delete
+                                      </Button>
                                     )}
-                                  </td>
-                                </>
+                                  </div>
+                                </td>
                               )}
                             </motion.tr>
                           ))}
@@ -693,17 +838,38 @@ export default function TeamPage() {
             )}
           </TabsContent>
           <TabsContent value="email" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Send Email</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Button onClick={() => setIsEmailDialogOpen(true)}>
-                  <Send className="h-4 w-4 mr-2" />
-                  Compose Email
-                </Button>
-                <Dialog open={isEmailDialogOpen} onOpenChange={setIsEmailDialogOpen}>
-                  <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <Dialog 
+              open={isEmailDialogOpen} 
+              onOpenChange={(open) => {
+                setIsEmailDialogOpen(open)
+                if (!open) {
+                  // Navigate back to Team Overview when dialog closes
+                  setActiveTab('team')
+                }
+                if (open && userDepartment) {
+                  // Auto-fill subject when dialog opens
+                  const autoFillSubject = async () => {
+                    try {
+                      const myTasks = await apiClient.getMyTasks()
+                      const inProgressTasks = myTasks.filter((task: any) => {
+                        const status = String(task.status || '').toUpperCase().trim()
+                        return status === 'IN_PROGRESS'
+                      })
+                      const taskCount = inProgressTasks.length
+                      
+                      setEmailForm(prev => ({
+                        ...prev,
+                        subject: `${userDepartment} In-Progress Tasks Report - ${taskCount} Task${taskCount !== 1 ? 's' : ''}`
+                      }))
+                    } catch (error) {
+                      console.error('Failed to fetch task counts:', error)
+                    }
+                  }
+                  autoFillSubject()
+                }
+              }}
+            >
+              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
                       <DialogTitle>Compose Email</DialogTitle>
                       <DialogDescription>
@@ -720,7 +886,7 @@ export default function TeamPage() {
                           placeholder="user@example.com"
                         />
                         <p className="text-xs text-muted-foreground mt-1">
-                          Smart defaults: users with in-progress or recurring tasks
+                          Multiple emails: Separate with comma (e.g., user1@example.com, user2@example.com)
                         </p>
                       </div>
                       <div>
@@ -729,76 +895,278 @@ export default function TeamPage() {
                           id="cc"
                           value={emailForm.cc}
                           onChange={(e) => setEmailForm({ ...emailForm, cc: e.target.value })}
-                          placeholder="cc@example.com"
+                          placeholder="cc@example.com, cc2@example.com"
                         />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Multiple emails: Separate with comma
+                        </p>
                       </div>
                       <div>
-                        <Label htmlFor="subject">Subject *</Label>
+                        <Label htmlFor="subject">Subject {includeDepartmentTasks ? '' : '*'}</Label>
                         <Input
                           id="subject"
                           value={emailForm.subject}
                           onChange={(e) => setEmailForm({ ...emailForm, subject: e.target.value })}
                           placeholder="Email subject"
+                          disabled={isSendingEmail}
                         />
+                        {includeDepartmentTasks && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Subject will be auto-generated based on department tasks
+                          </p>
+                        )}
                       </div>
-                      <div>
-                        <Label htmlFor="body">Body *</Label>
-                        <textarea
-                          id="body"
-                          className="flex min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                          value={emailForm.body}
-                          onChange={(e) => setEmailForm({ ...emailForm, body: e.target.value })}
-                          placeholder="Email body"
-                        />
-                      </div>
+                      {includeDepartmentTasks && (
+                        <div>
+                          <Label htmlFor="onLeaveMembers">Mark Members on Leave</Label>
+                          <div className="mb-2">
+                            <Input
+                              id="leaveMemberSearch"
+                              placeholder="Search members..."
+                              value={leaveMemberSearch}
+                              onChange={(e) => setLeaveMemberSearch(e.target.value)}
+                              className="w-full"
+                            />
+                          </div>
+                          <div className="border rounded-md p-2 max-h-48 overflow-y-auto">
+                            {(() => {
+                              if (isDepartmentMembersLoading && departmentMembersForLeave.length === 0) {
+                                return (
+                                  <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Loading department members...
+                                  </div>
+                                )
+                              }
+
+                              // Filter members based on search
+                              const filteredMembers = departmentMembersForLeave.filter((member) => {
+                                if (!leaveMemberSearch.trim()) return true
+                                const searchLower = leaveMemberSearch.toLowerCase()
+                                const name = (member.name || '').toLowerCase()
+                                const email = (member.email || '').toLowerCase()
+                                return name.includes(searchLower) || email.includes(searchLower)
+                              })
+
+                              if (filteredMembers.length === 0) {
+                                return (
+                                  <p className="text-sm text-muted-foreground text-center py-2">
+                                    {departmentMembersForLeave.length === 0
+                                      ? 'No department members found'
+                                      : 'No members found matching your search'}
+                                  </p>
+                                )
+                              }
+
+                              return (
+                                <div className="space-y-2">
+                                  {filteredMembers.map((member) => {
+                                    const isSelected = onLeaveMembers.includes(member.id)
+                                    return (
+                                      <div
+                                        key={member.id}
+                                        className="flex items-center gap-2 p-2 hover:bg-muted rounded-md cursor-pointer"
+                                        onClick={() => {
+                                          if (isSelected) {
+                                            setOnLeaveMembers(onLeaveMembers.filter((id) => id !== member.id))
+                                          } else {
+                                            setOnLeaveMembers([...onLeaveMembers, member.id])
+                                          }
+                                        }}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={isSelected}
+                                          onChange={() => {
+                                            if (isSelected) {
+                                              setOnLeaveMembers(onLeaveMembers.filter((id) => id !== member.id))
+                                            } else {
+                                              setOnLeaveMembers([...onLeaveMembers, member.id])
+                                            }
+                                          }}
+                                          className="rounded"
+                                          onClick={(e) => e.stopPropagation()}
+                                        />
+                                        <span className="text-sm flex-1">
+                                          {member.name || member.email}
+                                        </span>
+                                        {isSelected && (
+                                          <span className="text-xs text-red-600 font-medium">On Leave</span>
+                                        )}
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )
+                            })()}
+                          </div>
+                          {onLeaveMembers.length > 0 && (
+                            <p className="text-xs text-muted-foreground mt-2">
+                              {onLeaveMembers.length} member{onLeaveMembers.length !== 1 ? 's' : ''} marked on leave
+                            </p>
+                          )}
+                        </div>
+                      )}
                       <div className="flex items-center gap-2">
                         <input
                           type="checkbox"
                           id="includeDepartmentTasks"
                           className="rounded"
                           checked={includeDepartmentTasks}
-                          onChange={(e) => setIncludeDepartmentTasks(e.target.checked)}
+                          onChange={async (e) => {
+                            const checked = e.target.checked
+                            setIncludeDepartmentTasks(checked)
+                            setLeaveMemberSearch('')
+                            
+                            if (checked && userDepartment) {
+                              try {
+                                const [members, departmentTasks] = await Promise.all([
+                                  loadDepartmentMembersForLeave(userDepartment),
+                                  apiClient.getDepartmentTasks(),
+                                ])
+                                
+                                const inProgressTasks = departmentTasks.filter((task: any) => {
+                                  const status = String(task.status || '').toUpperCase().trim()
+                                  return status === 'IN_PROGRESS'
+                                })
+                                
+                                const uniqueEmployees = new Set(
+                                  inProgressTasks.flatMap((task: any) =>
+                                    task.assignees?.map((a: any) => a.user?.id).filter(Boolean) || []
+                                  )
+                                )
+                                
+                                const employeeCount = uniqueEmployees.size
+                                const taskCount = inProgressTasks.length
+                                
+                                setDepartmentTaskCounts({ employees: employeeCount, tasks: taskCount })
+                                
+                                const departmentEmails = members
+                                  .map((member: TeamMember) => member.email)
+                                  .filter((email: string) => email && email.trim())
+                                  .join(', ')
+                                
+                                setEmailForm((prev) => ({
+                                  ...prev,
+                                  cc: departmentEmails,
+                                  subject: `${userDepartment} In-Progress Tasks Report - ${employeeCount} Employee${employeeCount !== 1 ? 's' : ''}, ${taskCount} Task${taskCount !== 1 ? 's' : ''}`,
+                                }))
+                              } catch (error) {
+                                console.error('Failed to fetch department task counts:', error)
+                                setDepartmentTaskCounts(null)
+                                setEmailForm((prev) => ({
+                                  ...prev,
+                                  subject: `${userDepartment} In-Progress Tasks Report`,
+                                }))
+                              }
+                            } else if (!checked && userDepartment) {
+                              setDepartmentTaskCounts(null)
+                              applyDepartmentMembersForLeave([])
+                              try {
+                                const myTasks = await apiClient.getMyTasks()
+                                const inProgressTasks = myTasks.filter((task: any) => {
+                                  const status = String(task.status || '').toUpperCase().trim()
+                                  return status === 'IN_PROGRESS'
+                                })
+                                const taskCount = inProgressTasks.length
+                                
+                                setEmailForm((prev) => ({
+                                  ...prev,
+                                  cc: '',
+                                  subject: `${userDepartment} In-Progress Tasks Report - ${taskCount} Task${taskCount !== 1 ? 's' : ''}`,
+                                }))
+                              } catch (error) {
+                                console.error('Failed to fetch task counts:', error)
+                                setEmailForm((prev) => ({
+                                  ...prev,
+                                  cc: '',
+                                }))
+                              }
+                            } else {
+                              setDepartmentTaskCounts(null)
+                              applyDepartmentMembersForLeave([])
+                            }
+                          }}
+                          disabled={isSendingEmail}
                         />
-                        <Label htmlFor="includeDepartmentTasks" className="text-sm">
-                          Include department members' tasks (IN_PROGRESS & RECURRING)
+                        <Label htmlFor="includeDepartmentTasks" className="text-sm" style={{ color: '#006e90' }}>
+                          Select the check box to send all team members tasks(In Progress & Recurring)
                         </Label>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          id="attachSummary"
-                          className="rounded"
-                        />
-                        <Label htmlFor="attachSummary" className="text-sm">
-                          Attach project/task summary
-                        </Label>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          id="recurringWeekly"
-                          className="rounded"
-                        />
-                        <Label htmlFor="recurringWeekly" className="text-sm">
-                          Send summary emails for recurring tasks weekly
-                        </Label>
-                      </div>
-                      <div className="flex justify-end gap-2">
-                        <Button variant="outline" onClick={() => setIsEmailDialogOpen(false)}>
-                          Cancel
-                        </Button>
-                        <Button onClick={handleSendEmail}>
-                          <Send className="h-4 w-4 mr-2" />
-                          Send Email
-                        </Button>
+                      <div className="flex flex-col gap-2">
+                        {isSendingEmail && (
+                          <div className="w-full bg-gray-200 rounded-full h-2.5">
+                            <div className="bg-blue-600 h-2.5 rounded-full animate-pulse" style={{ width: '100%' }}></div>
+                          </div>
+                        )}
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" onClick={() => {
+                            setIsEmailDialogOpen(false)
+                            setActiveTab('team')
+                          }} disabled={isSendingEmail}>
+                            Cancel
+                          </Button>
+                          <Button onClick={handleSendEmail} disabled={isSendingEmail}>
+                            {isSendingEmail ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Sending Email...
+                              </>
+                            ) : (
+                              <>
+                                <Send className="h-4 w-4 mr-2" />
+                                Send Email
+                              </>
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </DialogContent>
                 </Dialog>
-              </CardContent>
-            </Card>
           </TabsContent>
         </Tabs>
+        <Dialog open={isRoleDialogOpen} onOpenChange={handleRoleDialogOpenChange}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit Team Member Role</DialogTitle>
+              <DialogDescription>
+                Update the role for{' '}
+                {selectedMemberForRole?.name || selectedMemberForRole?.email || 'the selected team member'}.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="memberRoleSelect">Role</Label>
+                <Select
+                  value={roleSelection}
+                  onValueChange={(value) => setRoleSelection(value as MemberRoleOption)}
+                  disabled={roleSaving}
+                >
+                  <SelectTrigger id="memberRoleSelect">
+                    <SelectValue placeholder="Select role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USER">User</SelectItem>
+                    <SelectItem value="ADMIN">Admin</SelectItem>
+                    {isSuperAdmin && (
+                      <SelectItem value="SUPER_ADMIN">Super Admin</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => handleRoleDialogOpenChange(false)} disabled={roleSaving}>
+                  Cancel
+                </Button>
+                <Button onClick={handleUpdateRole} disabled={roleSaving}>
+                  {roleSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </MainLayout>
   )

@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'
 const CACHE_PREFIX = 'api_cache_'
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
@@ -100,10 +100,22 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${this.token}`
     }
 
-    const response = await fetch(url, {
-      ...options,
-      headers,
-    })
+    let response: Response
+    try {
+      response = await fetch(url, {
+        ...options,
+        headers,
+      })
+    } catch (networkError: any) {
+      // Handle network errors (connection refused, timeout, etc.)
+      console.error('Network Error:', {
+        endpoint,
+        url,
+        error: networkError.message,
+        type: networkError.name,
+      })
+      throw new Error(`Network error: Unable to connect to the backend server. Please ensure the backend is running on ${this.baseUrl.replace('/api', '')}`)
+    }
 
     if (!response.ok) {
       let error: any = {}
@@ -115,23 +127,30 @@ class ApiClient {
       try {
         const contentType = clonedResponse.headers.get('content-type')
         if (contentType && contentType.includes('application/json')) {
-          error = await clonedResponse.json()
+          const jsonData = await clonedResponse.json()
+          error = jsonData || {}
           errorMessage = error.error || error.message || errorMessage
         } else {
           // If response is not JSON, try to get text
           const text = await clonedResponse.text()
-          if (text) {
+          if (text && text.trim()) {
             try {
               error = JSON.parse(text)
               errorMessage = error.error || error.message || errorMessage
             } catch {
               errorMessage = text || errorMessage
             }
+          } else {
+            // Use status text if no body
+            errorMessage = response.statusText || errorMessage
           }
         }
-      } catch (e) {
+      } catch (e: any) {
         // If we can't parse the error, use the status text
         errorMessage = response.statusText || errorMessage
+        if (e?.message) {
+          console.warn('Error parsing response:', e.message)
+        }
       }
       
       // Provide more helpful error messages
@@ -139,19 +158,23 @@ class ApiClient {
         throw new Error('Backend error: Please ensure Prisma client is regenerated. Stop the backend server, run "npm run db:generate" and "npm run db:push" in the backend directory, then restart the server.')
       }
       
-      // Log the full error for debugging
-      console.error('API Error:', {
-        endpoint,
-        url,
-        status: response.status,
-        statusText: response.statusText,
-        error: errorMessage,
-        fullError: error,
-      })
+      // Only log errors for non-404 status codes (404s are expected for missing resources)
+      // Also skip logging if error object is completely empty and status is 404
+      if (response.status !== 404) {
+        // Log the full error for debugging (only for non-404 errors)
+        console.error('API Error:', {
+          endpoint,
+          url,
+          status: response.status,
+          statusText: response.statusText,
+          error: errorMessage,
+          fullError: Object.keys(error).length > 0 ? error : undefined,
+        })
+      }
       
       // Provide more helpful error messages
       if (response.status === 500) {
-        const detailedMessage = error.error || error.message || errorMessage
+        const detailedMessage = error?.error || error?.message || errorMessage
         throw new Error(detailedMessage || 'Internal server error. Please check the backend logs.')
       }
       
@@ -238,8 +261,36 @@ class ApiClient {
     return data
   }
 
-  async getTaskStats(useCache: boolean = true) {
-    const endpoint = '/tasks/stats'
+  async getTaskStats(view: 'my' | 'department' | 'all-departments' = 'my', useCache: boolean = true) {
+    const endpoint = `/tasks/stats?view=${view}`
+    if (useCache) {
+      const cached = this.getCachedData<any>(endpoint)
+      if (cached) {
+        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
+        return Promise.resolve(cached)
+      }
+    }
+    const data = await this.request(endpoint)
+    this.setCachedData(endpoint, data)
+    return data
+  }
+
+  async getDepartmentTasks(useCache: boolean = true) {
+    const endpoint = '/tasks/department'
+    if (useCache) {
+      const cached = this.getCachedData<any>(endpoint)
+      if (cached) {
+        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
+        return Promise.resolve(cached)
+      }
+    }
+    const data = await this.request(endpoint)
+    this.setCachedData(endpoint, data)
+    return data
+  }
+
+  async getAllDepartmentsTasks(useCache: boolean = true) {
+    const endpoint = '/tasks/all-departments'
     if (useCache) {
       const cached = this.getCachedData<any>(endpoint)
       if (cached) {
@@ -346,7 +397,7 @@ class ApiClient {
     return result
   }
 
-  // Team - with caching (only for default requests without params)
+  // Team - with caching (skips caching only for search queries)
   async getTeamMembers(params?: { department?: string; search?: string }, useCache: boolean = true) {
     const queryParams = new URLSearchParams()
     if (params?.department) queryParams.append('department', params.department)
@@ -354,18 +405,20 @@ class ApiClient {
     const query = queryParams.toString()
     const endpoint = `/team/members${query ? `?${query}` : ''}`
     
-    // Only use cache for default requests (no params)
-    if (useCache && !params?.department && !params?.search) {
+    const shouldCache = !params?.search
+
+    if (useCache && shouldCache) {
       const cached = this.getCachedData<any>(endpoint)
       if (cached) {
         // Fetch fresh data in background
-        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
+        this.request(endpoint)
+          .then(data => this.setCachedData(endpoint, data))
+          .catch(() => {})
         return Promise.resolve(cached)
       }
     }
     const data = await this.request(endpoint)
-    // Only cache default requests (no params)
-    if (!params?.department && !params?.search) {
+    if (shouldCache) {
       this.setCachedData(endpoint, data)
     }
     return data
@@ -601,6 +654,23 @@ class ApiClient {
     return result
   }
 
+  async updateMemberRole(userId: string, role: 'USER' | 'ADMIN' | 'SUPER_ADMIN') {
+    const result = await this.request(`/team/members/${userId}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    })
+    this.clearCache('/team/members')
+    return result
+  }
+
+  async deactivateMember(userId: string) {
+    const result = await this.request(`/team/members/${userId}`, {
+      method: 'DELETE',
+    })
+    this.clearCache('/team/members')
+    return result
+  }
+
   // AI Query
   async aiQuery(query: string) {
     return this.request('/ai/query', {
@@ -609,18 +679,16 @@ class ApiClient {
     })
   }
 
-  // Activities - with caching
-  async getActivities(useCache: boolean = true) {
-    const endpoint = '/activities'
-    if (useCache) {
-      const cached = this.getCachedData<any>(endpoint)
-      if (cached) {
-        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
-        return Promise.resolve(cached)
-      }
-    }
+  // Activities - with caching and pagination
+  async getActivities(
+    view: 'my' | 'department' | 'all-departments' = 'my', 
+    options: { limit?: number; skip?: number; useCache?: boolean } = {}
+  ) {
+    const { limit = 20, skip = 0, useCache = false } = options
+    const endpoint = `/activities?view=${view}&limit=${limit}&skip=${skip}`
+    
+    // Don't use cache for paginated requests to avoid stale data
     const data = await this.request(endpoint)
-    this.setCachedData(endpoint, data)
     return data
   }
 }

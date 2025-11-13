@@ -8,7 +8,6 @@ import { getToken } from '@/lib/auth-client'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -25,6 +24,7 @@ interface Project {
   description?: string
   brand?: string
   company?: string
+  department?: string
   status: string
   createdAt: string
   members: { user: { id: string; name?: string; email: string } }[]
@@ -55,6 +55,7 @@ export default function ProjectsPage() {
     status: 'ACTIVE',
   })
   const [isRefreshing, setIsRefreshing] = useState<boolean>(!projectsCache)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const fetchProjects = useCallback(async (useCache: boolean = true) => {
     const cacheIsValid =
@@ -212,13 +213,13 @@ export default function ProjectsPage() {
       transition={{ duration: 0.2 }}
       className="h-full"
     >
-      <Card className="shadow-orange-500/30 hover:shadow-orange-500/50 hover:shadow-xl transition-all duration-300 h-full flex flex-col bg-gradient-to-br from-orange-600 via-amber-600 to-orange-700 border-0">
+      <Card className="hover:shadow-lg transition-shadow h-full flex flex-col">
         <CardHeader className="flex-shrink-0">
           <div className="flex items-start justify-between">
             <div className="flex-1 min-w-0">
-              <CardTitle className="text-xl text-white/90 line-clamp-2">{project.name}</CardTitle>
+              <CardTitle className="text-lg line-clamp-2">{project.name}</CardTitle>
               {project.description && (
-                <CardDescription className="mt-1 text-white/80 line-clamp-2">{project.description}</CardDescription>
+                <CardDescription className="mt-1 line-clamp-2">{project.description}</CardDescription>
               )}
             </div>
             <div className="flex gap-2 ml-2">
@@ -227,7 +228,6 @@ export default function ProjectsPage() {
                 size="icon"
                 onClick={() => onInvite(project)}
                 title="Invite Member"
-                className="bg-white/20 hover:bg-white/30 text-white border-0"
               >
                 <UserPlus className="h-4 w-4" />
               </Button>
@@ -235,7 +235,6 @@ export default function ProjectsPage() {
                 variant="ghost"
                 size="icon"
                 onClick={() => onEdit(project)}
-                className="bg-white/20 hover:bg-white/30 text-white border-0"
               >
                 <Edit className="h-4 w-4" />
               </Button>
@@ -243,7 +242,6 @@ export default function ProjectsPage() {
                 variant="ghost"
                 size="icon"
                 onClick={() => onDelete(project.id)}
-                className="bg-white/20 hover:bg-white/30 text-white border-0"
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -254,44 +252,49 @@ export default function ProjectsPage() {
           <div className="flex flex-wrap gap-2 mb-3 flex-shrink-0">
             <Badge 
               variant={project.status === 'ACTIVE' ? 'default' : 'secondary'}
-              className="bg-white/20 text-white border-white/30"
+              className={project.status === 'ACTIVE' ? 'bg-green-500 hover:bg-green-600 text-white' : ''}
             >
               {project.status}
             </Badge>
             {project.brand && (
-              <Badge variant="outline" className="bg-white/20 text-white border-white/30">
+              <Badge variant="outline">
                 {project.brand}
               </Badge>
             )}
             {project.company && (
-              <Badge variant="outline" className="bg-white/20 text-white border-white/30">
+              <Badge variant="outline">
                 {project.company}
               </Badge>
             )}
+            {project.department && (
+              <Badge variant="outline">
+                Dept: {project.department}
+              </Badge>
+            )}
             {project._count && (
-              <Badge variant="outline" className="bg-white/20 text-white border-white/30">
+              <Badge variant="outline">
                 {project._count.tasks} tasks
               </Badge>
             )}
           </div>
-          <div className="flex items-center gap-4 text-sm text-white mt-auto">
+          <div className="flex items-center gap-4 text-sm mt-auto">
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="flex items-center gap-2 cursor-pointer">
                     <div className="flex -space-x-2">
                       {project.members.slice(0, 3).map((member) => (
-                        <Avatar key={member.user.id} className="w-8 h-8 border-2 border-white/30">
-                          <AvatarFallback className="bg-white/20 text-white text-xs">
+                        <Avatar key={member.user.id} className="w-8 h-8 border-2 border-background">
+                          <AvatarFallback className="text-xs">
                             {member.user.name?.[0] || member.user.email[0].toUpperCase()}
                           </AvatarFallback>
                         </Avatar>
                       ))}
                     </div>
                     {project.members.length > 3 && (
-                      <span className="text-xs text-white/90">+{project.members.length - 3}</span>
+                      <span className="text-xs text-muted-foreground">+{project.members.length - 3}</span>
                     )}
-                    <span className="text-white">{project.members.length} members</span>
+                    <span className="text-muted-foreground">{project.members.length} members</span>
                   </div>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -316,7 +319,7 @@ export default function ProjectsPage() {
     <MainLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <div>
+          <div className="flex-1">
             <h1 className="text-3xl font-bold">Projects</h1>
             <p className="text-muted-foreground">Manage your projects and collaboration</p>
             {isRefreshing && (
@@ -326,14 +329,17 @@ export default function ProjectsPage() {
               </div>
             )}
           </div>
-          <Button onClick={() => {
-            resetForm()
-            setIsDialogOpen(true)
-          }}>
-            <Plus className="h-4 w-4 mr-2" />
-            New Project
-          </Button>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <div className="flex items-center gap-2">
+            <Button onClick={() => {
+              resetForm()
+              setIsDialogOpen(true)
+            }}>
+              <Plus className="h-4 w-4 mr-2" />
+              New Project
+            </Button>
+          </div>
+        </div>
+        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>{editingProject ? 'Edit Project' : 'Create New Project'}</DialogTitle>
@@ -392,95 +398,103 @@ export default function ProjectsPage() {
               </div>
             </DialogContent>
           </Dialog>
+
+        {/* KPI Cards */}
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">Active Projects</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.activeProjects}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">Tasks Completed</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.tasksCompleted}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">Members Collaborating</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.membersCollaborating}</div>
+            </CardContent>
+          </Card>
         </div>
 
-        <Tabs defaultValue="overview" className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="overview">Overview Dashboard</TabsTrigger>
-            <TabsTrigger value="manage">Manage Projects</TabsTrigger>
-          </TabsList>
-          <TabsContent value="overview" className="space-y-4">
-            {/* KPI Cards */}
-            <div className="grid gap-4 md:grid-cols-3">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm font-medium">Active Projects</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{stats.activeProjects}</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm font-medium">Tasks Completed</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{stats.tasksCompleted}</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm font-medium">Members Collaborating</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{stats.membersCollaborating}</div>
-                </CardContent>
-              </Card>
-            </div>
+        {/* Timeline Chart */}
+        <Card className="bg-transparent border-0 shadow-none">
+          <CardHeader className="pb-2">
+            <CardTitle>Tasks by Project</CardTitle>
+            <CardDescription>Number of tasks per project</CardDescription>
+          </CardHeader>
+          <CardContent className="bg-transparent p-0 [&_.recharts-bar-rectangle]:hover:!filter-none [&_.recharts-bar-rectangle]:hover:!drop-shadow-none [&_.recharts-wrapper]:!bg-transparent [&_.recharts-surface]:!bg-transparent [&_.recharts-cartesian-grid]:!bg-transparent [&_svg]:!bg-transparent">
+            <ResponsiveContainer width="100%" height={300}>
+                <BarChart 
+                  data={tasksByProjectData}
+                  margin={{ top: 5, right: 5, left: 5, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <RechartsTooltip />
+                  <Bar 
+                    dataKey="tasks" 
+                    fill="#8884d8"
+                    activeBar={false}
+                  />
+                </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
 
-            {/* Timeline Chart */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Tasks by Project</CardTitle>
-                <CardDescription>Number of tasks per project</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={tasksByProjectData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" />
-                      <YAxis />
-                      <RechartsTooltip />
-                      <Bar dataKey="tasks" fill="#8884d8" />
-                    </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </TabsContent>
-          <TabsContent value="manage" className="space-y-4">
-            <div className="flex items-center justify-end gap-2">
-              <div className="flex items-center gap-1 border rounded-lg p-1">
-                <Button
-                  variant={viewMode === 'list' ? 'default' : 'ghost'}
-                  size="icon"
-                  onClick={() => setViewMode('list')}
-                >
-                  <List className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === 'grid' ? 'default' : 'ghost'}
-                  size="icon"
-                  onClick={() => setViewMode('grid')}
-                >
-                  <Grid3x3 className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === 'kanban' ? 'default' : 'ghost'}
-                  size="icon"
-                  onClick={() => setViewMode('kanban')}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === 'gantt' ? 'default' : 'ghost'}
-                  size="icon"
-                  onClick={() => setViewMode('gantt')}
-                >
-                  <GanttChart className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
+        {/* View Type and Search Bar */}
+        <div className="flex items-center justify-between gap-2">
+          <Input
+            placeholder="Search projects..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-64"
+          />
+          <div className="flex items-center gap-1 border rounded-lg p-1">
+            <Button
+              variant={viewMode === 'list' ? 'default' : 'ghost'}
+              size="icon"
+              onClick={() => setViewMode('list')}
+            >
+              <List className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={viewMode === 'grid' ? 'default' : 'ghost'}
+              size="icon"
+              onClick={() => setViewMode('grid')}
+            >
+              <Grid3x3 className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={viewMode === 'kanban' ? 'default' : 'ghost'}
+              size="icon"
+              onClick={() => setViewMode('kanban')}
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={viewMode === 'gantt' ? 'default' : 'ghost'}
+              size="icon"
+              onClick={() => setViewMode('gantt')}
+            >
+              <GanttChart className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
 
+        {/* Manage Projects Section */}
+        <div className="space-y-4">
             {projects.length === 0 ? (
               <Card>
                 <CardContent className="py-8 text-center text-muted-foreground">
@@ -497,7 +511,19 @@ export default function ProjectsPage() {
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-4">
-                        {projects.map((project) => (
+                        {projects
+                          .filter(project => {
+                            if (!searchQuery.trim()) return true
+                            const query = searchQuery.toLowerCase()
+                            return (
+                              project.name.toLowerCase().includes(query) ||
+                              project.description?.toLowerCase().includes(query) ||
+                              project.brand?.toLowerCase().includes(query) ||
+                              project.company?.toLowerCase().includes(query) ||
+                              project.department?.toLowerCase().includes(query)
+                            )
+                          })
+                          .map((project) => (
                           <div key={project.id} className="border-l-4 border-primary pl-4">
                             <h3 className="font-semibold mb-2">{project.name}</h3>
                             <div className="space-y-2 ml-4">
@@ -530,7 +556,19 @@ export default function ProjectsPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {projects.map((project) => (
+                          {projects
+                            .filter(project => {
+                              if (!searchQuery.trim()) return true
+                              const query = searchQuery.toLowerCase()
+                              return (
+                                project.name.toLowerCase().includes(query) ||
+                                project.description?.toLowerCase().includes(query) ||
+                                project.brand?.toLowerCase().includes(query) ||
+                                project.company?.toLowerCase().includes(query) ||
+                                project.department?.toLowerCase().includes(query)
+                              )
+                            })
+                            .map((project) => (
                             <tr key={project.id} className="border-b hover:bg-accent/50">
                               <td className="p-4">
                                 <div>
@@ -538,10 +576,18 @@ export default function ProjectsPage() {
                                   {project.description && (
                                     <div className="text-sm text-muted-foreground">{project.description}</div>
                                   )}
+                                  {project.department && (
+                                    <div className="text-xs text-muted-foreground mt-1">
+                                      Department: {project.department}
+                                    </div>
+                                  )}
                                 </div>
                               </td>
                               <td className="p-4">
-                                <Badge variant={project.status === 'ACTIVE' ? 'default' : 'secondary'}>
+                                <Badge 
+                                  variant={project.status === 'ACTIVE' ? 'default' : 'secondary'}
+                                  className={project.status === 'ACTIVE' ? 'bg-green-500 hover:bg-green-600 text-white' : ''}
+                                >
                                   {project.status}
                                 </Badge>
                               </td>
@@ -607,7 +653,19 @@ export default function ProjectsPage() {
                 {viewMode === 'kanban' && (
                   <div className="flex gap-4 overflow-x-auto pb-4">
                     {['ACTIVE', 'COMPLETED', 'ON_HOLD', 'CANCELLED'].map((status) => {
-                      const statusProjects = projects.filter(p => p.status === status)
+                      const statusProjects = projects
+                        .filter(p => {
+                          if (p.status !== status) return false
+                          if (!searchQuery.trim()) return true
+                          const query = searchQuery.toLowerCase()
+                          return (
+                            p.name.toLowerCase().includes(query) ||
+                            p.description?.toLowerCase().includes(query) ||
+                            p.brand?.toLowerCase().includes(query) ||
+                            p.company?.toLowerCase().includes(query) ||
+                            p.department?.toLowerCase().includes(query)
+                          )
+                        })
                       return (
                         <div key={status} className="flex-shrink-0 w-80">
                           <div className="bg-muted rounded-lg p-3 mb-2">
@@ -646,50 +704,49 @@ export default function ProjectsPage() {
                 )}
               </>
             )}
+        </div>
 
-            {/* Invite Member Dialog */}
-            <Dialog open={isInviteDialogOpen} onOpenChange={setIsInviteDialogOpen}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Invite Member to {selectedProject?.name}</DialogTitle>
-                  <DialogDescription>
-                    Enter an email address to invite a member (internal or external user) to collaborate on this project.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="inviteEmail">Email Address</Label>
-                    <Input
-                      id="inviteEmail"
-                      type="email"
-                      value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                      placeholder="user@example.com"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Enter email address to invite (internal or external user)
-                    </p>
-                  </div>
-                  <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={() => setIsInviteDialogOpen(false)}>
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        if (selectedProject && inviteEmail) {
-                          handleInviteMember(selectedProject.id, inviteEmail)
-                        }
-                      }}
-                    >
-                      <Mail className="h-4 w-4 mr-2" />
-                      Send Invitation
-                    </Button>
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
-          </TabsContent>
-        </Tabs>
+        {/* Invite Member Dialog */}
+        <Dialog open={isInviteDialogOpen} onOpenChange={setIsInviteDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Invite Member to {selectedProject?.name}</DialogTitle>
+              <DialogDescription>
+                Enter an email address to invite a member (internal or external user) to collaborate on this project.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="inviteEmail">Email Address</Label>
+                <Input
+                  id="inviteEmail"
+                  type="email"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  placeholder="user@example.com"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Enter email address to invite (internal or external user)
+                </p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setIsInviteDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (selectedProject && inviteEmail) {
+                      handleInviteMember(selectedProject.id, inviteEmail)
+                    }
+                  }}
+                >
+                  <Mail className="h-4 w-4 mr-2" />
+                  Send Invitation
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </MainLayout>
   )

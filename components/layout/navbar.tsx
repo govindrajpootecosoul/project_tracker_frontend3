@@ -225,9 +225,13 @@ export function Navbar() {
             if (task && task.reviewStatus === 'UNDER_REVIEW') {
               acceptedIds.add(taskId)
             }
-          } catch (error) {
-            // Ignore errors, task might not exist or user might not have access
-            console.error('Failed to fetch task for notification:', error)
+          } catch (error: any) {
+            // Silently ignore 404 errors (task might have been deleted)
+            // Only log unexpected errors (non-404)
+            if (error?.message && !error.message.includes('not found') && !error.message.includes('404')) {
+              console.warn('Failed to fetch task for notification:', taskId, error.message)
+            }
+            // Don't log anything for expected 404 errors
           }
         })
       )
@@ -337,6 +341,34 @@ export function Navbar() {
       fetchUnreadCount()
     }, 5000)
     
+    // Check for token and fetch user details if token exists
+    const checkTokenAndFetchUser = () => {
+      const token = getToken()
+      if (token) {
+        fetchUserDetails({ force: true })
+      } else {
+        setUser(null)
+        setUserDetails(null)
+      }
+    }
+
+    // Initial check
+    checkTokenAndFetchUser()
+
+    // Listen for storage changes (when token is set/removed)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'token') {
+        checkTokenAndFetchUser()
+      }
+    }
+    window.addEventListener('storage', handleStorageChange)
+
+    // Listen for custom login event (for same-tab login)
+    const handleLogin = () => {
+      checkTokenAndFetchUser()
+    }
+    window.addEventListener('userLoggedIn', handleLogin)
+    
     // Listen for permission updates
     const handlePermissionUpdate = () => {
       fetchUserDetails({ force: true })
@@ -352,6 +384,8 @@ export function Navbar() {
     
     return () => {
       clearInterval(interval)
+      window.removeEventListener('storage', handleStorageChange)
+      window.removeEventListener('userLoggedIn', handleLogin)
       window.removeEventListener('userPermissionsUpdated', handlePermissionUpdate)
       window.removeEventListener('refreshNotifications', handleNotificationRefresh)
     }
@@ -814,7 +848,6 @@ export function Navbar() {
     <nav className="sticky top-0 z-30 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex h-14 items-center justify-between px-4 lg:px-6">
         <div className="flex items-center gap-4">
-          <h2 className="text-lg font-semibold">Project & Task Tracker</h2>
         </div>
         
         <div className="flex items-center gap-4">

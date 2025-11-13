@@ -39,6 +39,8 @@ export default function SignInPage() {
         // Store user info
         if (typeof window !== 'undefined') {
           localStorage.setItem('user', JSON.stringify(result.user))
+          // Dispatch custom event to notify navbar about login
+          window.dispatchEvent(new Event('userLoggedIn'))
           // Get redirect URL from query params or default to dashboard
           const urlParams = new URLSearchParams(window.location.search)
           const redirectTo = urlParams.get('redirect') || '/dashboard'

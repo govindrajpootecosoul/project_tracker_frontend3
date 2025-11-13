@@ -17,6 +17,9 @@ model User {
   emailVerified DateTime?
   image         String?
   password      String?   // For credentials provider
+  department    String?
+  role          String    @default("user") // Store as string to match database (user/admin/superadmin)
+  isActive      Boolean   @default(true) @map("isActive")
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   

@@ -88,6 +88,7 @@ export default function SubscriptionsPage() {
   const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
   const [selectedSubscription, setSelectedSubscription] = useState<Subscription | null>(null)
   const [formData, setFormData] = useState<FormData>(initialFormData)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const fetchSubscriptions = useCallback(async () => {
     try {
@@ -378,7 +379,7 @@ export default function SubscriptionsPage() {
     <MainLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <div>
+          <div className="flex-1">
             <h1 className="text-3xl font-bold">My Subscriptions</h1>
             <p className="text-muted-foreground">Manage your subscriptions and collaborate with your team</p>
           </div>
@@ -556,10 +557,18 @@ export default function SubscriptionsPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Subscriptions</CardTitle>
-              <Button variant="outline" onClick={handleExport}>
-                <Download className="h-4 w-4 mr-2" />
-                Export
-              </Button>
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Search subscriptions..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-64"
+                />
+                <Button variant="outline" onClick={handleExport}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -578,8 +587,21 @@ export default function SubscriptionsPage() {
                       <th className="text-left p-4">Actions</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {subscriptions.map((subscription) => (
+            <tbody>
+              {subscriptions
+                .filter(subscription => {
+                  if (!searchQuery.trim()) return true
+                  const query = searchQuery.toLowerCase()
+                  return (
+                    subscription.name.toLowerCase().includes(query) ||
+                    subscription.url?.toLowerCase().includes(query) ||
+                    subscription.description?.toLowerCase().includes(query) ||
+                    subscription.notes?.toLowerCase().includes(query) ||
+                    subscription.status.toLowerCase().includes(query) ||
+                    subscription.billingCycle.toLowerCase().includes(query)
+                  )
+                })
+                .map((subscription) => (
                       <motion.tr
                         key={subscription.id}
                         initial={{ opacity: 0, y: 20 }}

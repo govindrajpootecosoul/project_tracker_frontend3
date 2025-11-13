@@ -1,12 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { MainLayout } from '@/components/layout/main-layout'
 import { apiClient } from '@/lib/api'
 import { getToken } from '@/lib/auth-client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { motion } from 'framer-motion'
 import { CheckCircle, Clock, AlertCircle, RefreshCw, TrendingUp, Circle, Pause, FolderKanban, Users, Plus, Edit, Trash2, MessageSquare, Mail, FileCheck } from 'lucide-react'
 import { format, formatDistanceToNow } from 'date-fns'
@@ -31,6 +32,8 @@ interface TeamMember {
 
 export default function DashboardPage() {
   const router = useRouter()
+  const [currentView, setCurrentView] = useState<'my' | 'department' | 'all-departments'>('my')
+  const [userRole, setUserRole] = useState<string>('USER')
   const [stats, setStats] = useState({
     totalTasks: 0,
     completedTasks: 0,
@@ -43,6 +46,12 @@ export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [activities, setActivities] = useState<any[]>([])
+  const [inProgressTasks, setInProgressTasks] = useState<any[]>([])
+  const [isScrollingPaused, setIsScrollingPaused] = useState(false)
+  const [activitiesLoading, setActivitiesLoading] = useState(false)
+  const [hasMoreActivities, setHasMoreActivities] = useState(true)
+  const [activitiesSkip, setActivitiesSkip] = useState(0)
+  const activitiesContainerRef = useRef<HTMLDivElement | null>(null)
 
   // Load cached data immediately on mount
   useEffect(() => {
@@ -68,32 +77,21 @@ export default function DashboardPage() {
       const cachedStats = getCached('/tasks/stats')
       const cachedProjects = getCached('/projects')
       const cachedTeamMembers = getCached('/team/members')
-      const cachedActivities = getCached('/activities')
+      // Don't load cached activities to ensure we start with fresh pagination
+      // if (cachedActivities) setActivities(cachedActivities)
 
       if (cachedStats) setStats(cachedStats)
       if (cachedProjects) setProjects(cachedProjects)
       if (cachedTeamMembers) setTeamMembers(cachedTeamMembers)
-      if (cachedActivities) setActivities(cachedActivities)
     } catch (e) {
       // Ignore cache errors
     }
   }, [])
 
-  useEffect(() => {
-    // Check authentication
-    const token = getToken()
-    if (!token) {
-      router.push('/auth/signin')
-      return
-    }
-
-    fetchStats()
-  }, [router])
-
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     try {
       const [statsData, projectsData, teamMembersData] = await Promise.all([
-        apiClient.getTaskStats(),
+        apiClient.getTaskStats(currentView),
         apiClient.getProjects(),
         apiClient.getTeamMembers(),
       ])
@@ -103,16 +101,111 @@ export default function DashboardPage() {
       
       // Fetch activities separately to avoid breaking the dashboard if it fails
       try {
-        const activitiesData = await apiClient.getActivities()
-        setActivities(activitiesData as any[])
+        const activitiesData = await apiClient.getActivities(currentView, { limit: 20, skip: 0 }) as any[]
+        setActivities(activitiesData)
+        setActivitiesSkip(20)
+        setHasMoreActivities(activitiesData.length === 20) // If we got 20, there might be more
       } catch (activityError) {
         console.error('Failed to fetch activities:', activityError)
         setActivities([]) // Set empty array if activities fail to load
+        setHasMoreActivities(false)
+        setActivitiesSkip(0)
+      }
+
+      // Fetch in-progress tasks based on current view
+      try {
+        let tasksData: any[] = []
+        if (currentView === 'my') {
+          tasksData = await apiClient.getMyTasks()
+        } else if (currentView === 'department') {
+          tasksData = await apiClient.getDepartmentTasks()
+        } else if (currentView === 'all-departments') {
+          tasksData = await apiClient.getAllDepartmentsTasks()
+        } else {
+          tasksData = await apiClient.getMyTasks()
+        }
+        
+        // Filter only IN_PROGRESS tasks
+        const inProgress = tasksData.filter((task: any) => {
+          const status = String(task.status || '').toUpperCase().trim()
+          return status === 'IN_PROGRESS'
+        })
+        setInProgressTasks(inProgress)
+      } catch (taskError) {
+        console.error('Failed to fetch in-progress tasks:', taskError)
+        setInProgressTasks([])
       }
     } catch (error) {
       console.error('Failed to fetch stats:', error)
     }
-  }
+  }, [currentView])
+
+  // Load more activities function
+  const loadMoreActivities = useCallback(async () => {
+    if (activitiesLoading || !hasMoreActivities) return
+
+    setActivitiesLoading(true)
+    try {
+      const newActivities = await apiClient.getActivities(currentView, { 
+        limit: 20, 
+        skip: activitiesSkip 
+      }) as any[]
+      
+      if (newActivities.length === 0) {
+        setHasMoreActivities(false)
+      } else {
+        setActivities(prev => [...prev, ...newActivities])
+        setActivitiesSkip(prev => prev + newActivities.length)
+        setHasMoreActivities(newActivities.length === 20) // If we got 20, there might be more
+      }
+    } catch (error) {
+      console.error('Failed to load more activities:', error)
+      setHasMoreActivities(false)
+    } finally {
+      setActivitiesLoading(false)
+    }
+  }, [currentView, activitiesSkip, activitiesLoading, hasMoreActivities])
+
+  // Handle scroll for infinite loading
+  useEffect(() => {
+    const container = activitiesContainerRef.current
+    if (!container) return
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container
+      // Load more when user is within 100px of the bottom
+      if (scrollHeight - scrollTop - clientHeight < 100 && hasMoreActivities && !activitiesLoading) {
+        loadMoreActivities()
+      }
+    }
+
+    container.addEventListener('scroll', handleScroll)
+    return () => container.removeEventListener('scroll', handleScroll)
+  }, [hasMoreActivities, activitiesLoading, loadMoreActivities])
+
+  useEffect(() => {
+    // Check authentication
+    const token = getToken()
+    if (!token) {
+      router.push('/auth/signin')
+      return
+    }
+
+    // Fetch user role
+    const fetchUserRole = async () => {
+      try {
+        const user = await apiClient.getUserRole()
+        if (user?.role) {
+          setUserRole(user.role)
+        }
+      } catch (error) {
+        console.error('Failed to fetch user role:', error)
+      }
+    }
+
+    fetchUserRole()
+    fetchStats()
+  }, [router, fetchStats])
 
   // Calculate percentages for task status - show all statuses
   // Ensure all values are numbers (default to 0 if undefined/null/NaN)
@@ -170,16 +263,7 @@ export default function DashboardPage() {
     .filter(item => item.value > 0) // Only show projects with tasks
     .sort((a, b) => b.value - a.value) // Sort by task count descending
 
-  // Calculate percentages for team members
-  const tasksByMemberData = teamMembers
-    .map(member => ({
-      name: member.name || member.email,
-      value: member.taskCount || 0,
-      icon: Users,
-      color: COLORS[teamMembers.indexOf(member) % COLORS.length],
-    }))
-    .filter(item => item.value > 0) // Only show members with tasks
-    .sort((a, b) => b.value - a.value) // Sort by task count descending
+  // Removed tasksByMemberData - no longer displaying "Tasks by Team Member"
 
   // Helper function to calculate percentage
   const calculatePercentage = (value: number, total: number): number => {
@@ -306,12 +390,41 @@ export default function DashboardPage() {
     },
   ]
 
+  const isAdmin = userRole === 'ADMIN'
+  const isSuperAdmin = userRole === 'SUPER_ADMIN'
+
   return (
     <MainLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold">Dashboard</h1>
-          <p className="text-muted-foreground">Overview of your tasks and team performance</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Dashboard</h1>
+            <p className="text-muted-foreground">Overview of your tasks and team performance</p>
+          </div>
+          {(isAdmin || isSuperAdmin) && (
+            <div className="flex gap-2">
+              <Button
+                variant={currentView === 'my' ? 'default' : 'outline'}
+                onClick={() => setCurrentView('my')}
+              >
+                My Tasks
+              </Button>
+              <Button
+                variant={currentView === 'department' ? 'default' : 'outline'}
+                onClick={() => setCurrentView('department')}
+              >
+                Department Tasks
+              </Button>
+              {isSuperAdmin && (
+                <Button
+                  variant={currentView === 'all-departments' ? 'default' : 'outline'}
+                  onClick={() => setCurrentView('all-departments')}
+                >
+                  All Departments Tasks
+                </Button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* KPI Cards */}
@@ -359,11 +472,109 @@ export default function DashboardPage() {
           />
         </div>
 
-        <PercentageBarWidget
-          title="Tasks by Team Member"
-          data={tasksByMemberData}
-          total={tasksByMemberData.reduce((sum, item) => sum + item.value, 0)}
-        />
+        {/* In Progress Tasks - Auto Scroll Loop */}
+        <Card>
+          <CardHeader>
+            <CardTitle>In Progress Tasks</CardTitle>
+            <CardDescription>Tasks currently in progress</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {inProgressTasks.length === 0 ? (
+              <div className="text-center text-muted-foreground py-8 h-[350px] flex items-center justify-center">
+                No in-progress tasks
+              </div>
+            ) : (
+              <div 
+                className="h-[350px] overflow-hidden relative"
+                onMouseEnter={() => setIsScrollingPaused(true)}
+                onMouseLeave={() => setIsScrollingPaused(false)}
+              >
+                <div 
+                  id="inProgressTasksScroll"
+                  className="space-y-3 pr-2"
+                  style={{
+                    animation: inProgressTasks.length > 0 && !isScrollingPaused 
+                      ? 'scrollLoop 30s linear infinite' 
+                      : 'none',
+                    willChange: 'transform'
+                  }}
+                >
+                  {/* Duplicate tasks for seamless loop */}
+                  {[...inProgressTasks, ...inProgressTasks].map((task, index) => (
+                    <div
+                      key={`${task.id}-${index}`}
+                      className="p-4 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
+                      onClick={() => router.push(`/tasks?task=${task.id}`)}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-sm text-foreground truncate">
+                            {task.title}
+                          </h4>
+                          {task.description && (
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                              {task.description}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-3 mt-2 flex-wrap">
+                            {task.project && (
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <FolderKanban className="h-3 w-3" />
+                                <span className="truncate">{task.project.name}</span>
+                              </div>
+                            )}
+                            {task.dueDate && (
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Clock className="h-3 w-3" />
+                                <span>{format(new Date(task.dueDate), 'MMM d, yyyy')}</span>
+                              </div>
+                            )}
+                            {task.priority && (
+                              <Badge
+                                variant={
+                                  task.priority === 'HIGH'
+                                    ? 'destructive'
+                                    : task.priority === 'MEDIUM'
+                                    ? 'default'
+                                    : 'secondary'
+                                }
+                                className="text-xs"
+                              >
+                                {task.priority}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex-shrink-0">
+                          <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                            <Clock className="h-3 w-3 mr-1" />
+                            In Progress
+                          </Badge>
+                        </div>
+                      </div>
+                      {task.assignees && task.assignees.length > 0 && (
+                        <div className="flex items-center gap-2 mt-3 pt-3 border-t">
+                          <Users className="h-3 w-3 text-muted-foreground" />
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {task.assignees.map((assignee: any, idx: number) => (
+                              <span
+                                key={assignee.user?.id || idx}
+                                className="text-xs text-muted-foreground"
+                              >
+                                {assignee.user?.name || assignee.user?.email || 'Unknown'}
+                                {idx < task.assignees.length - 1 && ','}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Recent Activity */}
         <Card>
@@ -372,7 +583,10 @@ export default function DashboardPage() {
             <CardDescription>Latest activities and updates</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
+            <div 
+              ref={activitiesContainerRef}
+              className="space-y-4 max-h-[600px] overflow-y-auto pr-2"
+            >
               {activities.length === 0 ? (
                 <div className="text-center text-muted-foreground py-8">
                   No recent activities
@@ -436,6 +650,16 @@ export default function DashboardPage() {
                     </div>
                   )
                 })
+              )}
+              {activitiesLoading && (
+                <div className="text-center text-muted-foreground py-4">
+                  Loading more activities...
+                </div>
+              )}
+              {!hasMoreActivities && activities.length > 0 && (
+                <div className="text-center text-muted-foreground py-4 text-sm">
+                  No more activities to load
+                </div>
               )}
             </div>
           </CardContent>

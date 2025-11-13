@@ -58,6 +58,8 @@ export default function SignUpPage() {
         // Store user info
         if (typeof window !== 'undefined') {
           localStorage.setItem('user', JSON.stringify(result.user))
+          // Dispatch custom event to notify navbar about login
+          window.dispatchEvent(new Event('userLoggedIn'))
         }
         router.push('/dashboard')
       } else {

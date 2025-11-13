@@ -89,6 +89,7 @@ export default function CredentialsPage() {
   const [formData, setFormData] = useState<FormData>(initialFormData)
   const [showPasswords, setShowPasswords] = useState<{ [key: string]: boolean }>({})
   const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const fetchCredentials = useCallback(async () => {
     try {
@@ -334,7 +335,7 @@ export default function CredentialsPage() {
     <MainLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <div>
+          <div className="flex-1">
             <h1 className="text-3xl font-bold">Credential Manager</h1>
             <p className="text-muted-foreground">Manage login credentials and collaborate with your team</p>
           </div>
@@ -398,10 +399,18 @@ export default function CredentialsPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Credentials</CardTitle>
-              <Button variant="outline" onClick={handleExport}>
-                <Download className="h-4 w-4 mr-2" />
-                Export
-              </Button>
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Search credentials..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-64"
+                />
+                <Button variant="outline" onClick={handleExport}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -420,8 +429,21 @@ export default function CredentialsPage() {
                       <th className="text-left p-4">Actions</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {credentials.map((credential) => (
+            <tbody>
+              {credentials
+                .filter(credential => {
+                  if (!searchQuery.trim()) return true
+                  const query = searchQuery.toLowerCase()
+                  return (
+                    credential.company.toLowerCase().includes(query) ||
+                    credential.geography.toLowerCase().includes(query) ||
+                    credential.platform.toLowerCase().includes(query) ||
+                    credential.url?.toLowerCase().includes(query) ||
+                    credential.username.toLowerCase().includes(query) ||
+                    credential.notes?.toLowerCase().includes(query)
+                  )
+                })
+                .map((credential) => (
                       <motion.tr
                         key={credential.id}
                         initial={{ opacity: 0, y: 20 }}
