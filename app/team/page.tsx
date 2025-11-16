@@ -1025,19 +1025,19 @@ export default function TeamPage() {
                                   apiClient.getDepartmentTasks(),
                                 ])
                                 
-                                const inProgressTasks = departmentTasks.filter((task: any) => {
+                                const inProgressAndRecurringTasks = departmentTasks.filter((task: any) => {
                                   const status = String(task.status || '').toUpperCase().trim()
-                                  return status === 'IN_PROGRESS'
+                                  return status === 'IN_PROGRESS' || status === 'RECURRING'
                                 })
                                 
                                 const uniqueEmployees = new Set(
-                                  inProgressTasks.flatMap((task: any) =>
+                                  inProgressAndRecurringTasks.flatMap((task: any) =>
                                     task.assignees?.map((a: any) => a.user?.id).filter(Boolean) || []
                                   )
                                 )
                                 
                                 const employeeCount = uniqueEmployees.size
-                                const taskCount = inProgressTasks.length
+                                const taskCount = inProgressAndRecurringTasks.length
                                 
                                 setDepartmentTaskCounts({ employees: employeeCount, tasks: taskCount })
                                 
@@ -1049,14 +1049,14 @@ export default function TeamPage() {
                                 setEmailForm((prev) => ({
                                   ...prev,
                                   cc: departmentEmails,
-                                  subject: `${userDepartment} In-Progress Tasks Report - ${employeeCount} Employee${employeeCount !== 1 ? 's' : ''}, ${taskCount} Task${taskCount !== 1 ? 's' : ''}`,
+                                  subject: `${userDepartment} In-Progress & Recurring Tasks Report - ${employeeCount} Employee${employeeCount !== 1 ? 's' : ''}, ${taskCount} Task${taskCount !== 1 ? 's' : ''}`,
                                 }))
                               } catch (error) {
                                 console.error('Failed to fetch department task counts:', error)
                                 setDepartmentTaskCounts(null)
                                 setEmailForm((prev) => ({
                                   ...prev,
-                                  subject: `${userDepartment} In-Progress Tasks Report`,
+                                  subject: `${userDepartment} In-Progress & Recurring Tasks Report`,
                                 }))
                               }
                             } else if (!checked && userDepartment) {
@@ -1064,16 +1064,16 @@ export default function TeamPage() {
                               applyDepartmentMembersForLeave([])
                               try {
                                 const myTasks = await apiClient.getMyTasks()
-                                const inProgressTasks = myTasks.filter((task: any) => {
+                                const inProgressAndRecurringTasks = myTasks.filter((task: any) => {
                                   const status = String(task.status || '').toUpperCase().trim()
-                                  return status === 'IN_PROGRESS'
+                                  return status === 'IN_PROGRESS' || status === 'RECURRING'
                                 })
-                                const taskCount = inProgressTasks.length
+                                const taskCount = inProgressAndRecurringTasks.length
                                 
                                 setEmailForm((prev) => ({
                                   ...prev,
                                   cc: '',
-                                  subject: `${userDepartment} In-Progress Tasks Report - ${taskCount} Task${taskCount !== 1 ? 's' : ''}`,
+                                  subject: `${userDepartment} In-Progress & Recurring Tasks Report - ${taskCount} Task${taskCount !== 1 ? 's' : ''}`,
                                 }))
                               } catch (error) {
                                 console.error('Failed to fetch task counts:', error)
