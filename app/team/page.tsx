@@ -340,6 +340,26 @@ export default function TeamPage() {
     return refreshDepartmentMembers(department, true)
   }, [teamMembers, applyDepartmentMembersForLeave, refreshDepartmentMembers])
 
+  const fetchDepartmentTasksForEmail = useCallback(async (): Promise<any[]> => {
+    if (isAdmin) {
+      return apiClient.getDepartmentTasks()
+    }
+
+    const [myTasks, teamTasks] = await Promise.all([
+      apiClient.getMyTasks(),
+      apiClient.getTeamTasks(),
+    ])
+
+    const uniqueTasks = new Map<string, any>()
+    ;[...(myTasks || []), ...(teamTasks || [])].forEach((task: any) => {
+      if (task?.id && !uniqueTasks.has(task.id)) {
+        uniqueTasks.set(task.id, task)
+      }
+    })
+
+    return Array.from(uniqueTasks.values())
+  }, [isAdmin])
+
   // Fetch data when search query or department changes
   useEffect(() => {
     if (userRole && userDepartment !== undefined) {
@@ -1019,11 +1039,10 @@ export default function TeamPage() {
                             setLeaveMemberSearch('')
                             
                             if (checked && userDepartment) {
+                              let departmentMembers: TeamMember[] = []
                               try {
-                                const [members, departmentTasks] = await Promise.all([
-                                  loadDepartmentMembersForLeave(userDepartment),
-                                  apiClient.getDepartmentTasks(),
-                                ])
+                                departmentMembers = await loadDepartmentMembersForLeave(userDepartment)
+                                const departmentTasks = await fetchDepartmentTasksForEmail()
                                 
                                 const inProgressAndRecurringTasks = departmentTasks.filter((task: any) => {
                                   const status = String(task.status || '').toUpperCase().trim()
@@ -1041,7 +1060,7 @@ export default function TeamPage() {
                                 
                                 setDepartmentTaskCounts({ employees: employeeCount, tasks: taskCount })
                                 
-                                const departmentEmails = members
+                                const departmentEmails = departmentMembers
                                   .map((member: TeamMember) => member.email)
                                   .filter((email: string) => email && email.trim())
                                   .join(', ')
@@ -1054,8 +1073,24 @@ export default function TeamPage() {
                               } catch (error) {
                                 console.error('Failed to fetch department task counts:', error)
                                 setDepartmentTaskCounts(null)
+                                
+                                let fallbackMembers = departmentMembers
+                                if (fallbackMembers.length === 0 && userDepartment) {
+                                  try {
+                                    fallbackMembers = await loadDepartmentMembersForLeave(userDepartment)
+                                  } catch {
+                                    fallbackMembers = []
+                                  }
+                                }
+
+                                const fallbackEmails = fallbackMembers
+                                  .map((member: TeamMember) => member.email)
+                                  .filter((email: string) => email && email.trim())
+                                  .join(', ')
+
                                 setEmailForm((prev) => ({
                                   ...prev,
+                                  cc: fallbackEmails,
                                   subject: `${userDepartment} In-Progress & Recurring Tasks Report`,
                                 }))
                               }
