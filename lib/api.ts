@@ -161,17 +161,22 @@ class ApiClient {
       }
       
       // Only log errors for non-404 status codes (404s are expected for missing resources)
-      // Also skip logging if error object is completely empty and status is 404
       if (response.status !== 404) {
-        // Log the full error for debugging (only for non-404 errors)
-        console.error('API Error:', {
+        // Build log object with only meaningful data
+        const logData: any = {
           endpoint,
           url,
           status: response.status,
           statusText: response.statusText,
           error: errorMessage,
-          fullError: Object.keys(error).length > 0 ? error : undefined,
-        })
+        }
+        
+        // Only include fullError if it has meaningful content
+        if (error && typeof error === 'object' && Object.keys(error).length > 0) {
+          logData.fullError = error
+        }
+        
+        console.error('API Error:', logData)
       }
       
       // Provide more helpful error messages
@@ -203,6 +208,27 @@ class ApiClient {
     })
     this.setToken(data.token)
     return data
+  }
+
+  async requestPasswordReset(email: string) {
+    return this.request('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+  }
+
+  async verifyPasswordResetCode(email: string, code: string) {
+    return this.request('/auth/verify-reset-code', {
+      method: 'POST',
+      body: JSON.stringify({ email, code }),
+    })
+  }
+
+  async resetPassword(email: string, code: string, password: string) {
+    return this.request('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, code, password }),
+    })
   }
 
   // Tasks - with caching
@@ -391,9 +417,26 @@ class ApiClient {
     return result
   }
 
+  async removeProjectMember(projectId: string, memberId: string) {
+    const result = await this.request(`/projects/${projectId}/members/${memberId}`, {
+      method: 'DELETE',
+    })
+    this.clearCache('/projects')
+    return result
+  }
+
   async deleteProject(id: string) {
     const result = await this.request(`/projects/${id}`, {
       method: 'DELETE',
+    })
+    this.clearCache('/projects')
+    return result
+  }
+
+  async requestProjectCollaboration(data: { projectIds: string[]; memberIds: string[]; manualEmails?: string[]; role?: 'member' | 'owner'; message?: string }) {
+    const result = await this.request('/projects/collaborations/request', {
+      method: 'POST',
+      body: JSON.stringify(data),
     })
     this.clearCache('/projects')
     return result
@@ -529,6 +572,24 @@ class ApiClient {
     return this.request(`/credentials/${credentialId}/members/${memberId}/active`, {
       method: 'PUT',
       body: JSON.stringify({ isActive }),
+    })
+  }
+
+  async requestCredentialCollaboration(data: { credentialIds: string[]; memberIds: string[]; role?: 'viewer' | 'editor'; message?: string }) {
+    return this.request('/credentials/collaborations/request', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async getCredentialCollaborationRequests() {
+    return this.request('/credentials/collaborations/requests')
+  }
+
+  async respondCredentialCollaborationRequest(requestId: string, accept: boolean) {
+    return this.request(`/credentials/collaborations/${requestId}/respond`, {
+      method: 'POST',
+      body: JSON.stringify({ accept }),
     })
   }
 
@@ -668,6 +729,44 @@ class ApiClient {
   async deactivateMember(userId: string) {
     const result = await this.request(`/team/members/${userId}`, {
       method: 'DELETE',
+    })
+    this.clearCache('/team/members')
+    return result
+  }
+
+  async createTeamMember(data: {
+    name?: string
+    email: string
+    password: string
+    department?: string
+    company?: string
+    employeeId?: string
+    role: 'USER' | 'ADMIN' | 'SUPER_ADMIN'
+    hasCredentialAccess?: boolean
+    hasSubscriptionAccess?: boolean
+  }) {
+    const result = await this.request('/team/members', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    this.clearCache('/team/members')
+    return result
+  }
+
+  async updateTeamMember(userId: string, data: {
+    name?: string
+    email?: string
+    password?: string
+    department?: string
+    company?: string
+    employeeId?: string
+    role?: 'USER' | 'ADMIN' | 'SUPER_ADMIN'
+    hasCredentialAccess?: boolean
+    hasSubscriptionAccess?: boolean
+  }) {
+    const result = await this.request(`/team/members/${userId}/details`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
     })
     this.clearCache('/team/members')
     return result

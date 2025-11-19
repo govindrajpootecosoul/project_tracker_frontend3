@@ -123,6 +123,8 @@ export function Navbar() {
   const [acceptingTaskIds, setAcceptingTaskIds] = useState<Set<string>>(new Set())
   const [cancellingTaskIds, setCancellingTaskIds] = useState<Set<string>>(new Set())
   const [acceptedTaskIds, setAcceptedTaskIds] = useState<Set<string>>(new Set())
+  const [respondingCollabRequestIds, setRespondingCollabRequestIds] = useState<Set<string>>(new Set())
+  const [pendingCollabRequestIds, setPendingCollabRequestIds] = useState<Set<string>>(new Set())
   const [isAIDialogOpen, setIsAIDialogOpen] = useState(false)
   const [aiQuery, setAiQuery] = useState('')
   const [aiResponse, setAiResponse] = useState<AIResponse | null>(null)
@@ -204,9 +206,17 @@ export function Navbar() {
   // Fetch functions need to be defined before useEffect - wrapped in useCallback to prevent infinite loops
   const fetchNotifications = useCallback(async () => {
     try {
-      const data = await apiClient.getNotifications()
-      const notificationsData = data as Notification[]
+      const [notificationsResponse, collabRequests] = await Promise.all([
+        apiClient.getNotifications(),
+        apiClient.getCredentialCollaborationRequests().catch(() => []),
+      ])
+      const notificationsData = notificationsResponse as Notification[]
       setNotifications(notificationsData)
+      if (Array.isArray(collabRequests)) {
+        setPendingCollabRequestIds(new Set(collabRequests.map((request: any) => request.id)))
+      } else {
+        setPendingCollabRequestIds(new Set())
+      }
       
       // After fetching notifications, check which review requests have already been accepted
       const reviewNotifications = notificationsData.filter(
@@ -471,6 +481,18 @@ export function Navbar() {
     }
   }
 
+  const getCollabRequestIdFromNotification = useCallback((notification: Notification) => {
+    if (!notification.link) return null
+    try {
+      const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+      const url = new URL(notification.link, base)
+      return url.searchParams.get('collabRequest')
+    } catch {
+      const match = notification.link.match(/collabRequest=([^&]+)/)
+      return match ? match[1] : null
+    }
+  }, [])
+
   const handleAcceptReviewRequest = async (e: React.MouseEvent, notification: Notification) => {
     e.stopPropagation()
     if (!notification.link) return
@@ -551,6 +573,50 @@ export function Navbar() {
         const newSet = new Set(prev)
         newSet.delete(taskId)
         return newSet
+      })
+    }
+  }
+
+  const handleCollabRequestResponse = async (e: React.MouseEvent, notification: Notification, accept: boolean) => {
+    e.stopPropagation()
+    const requestId = getCollabRequestIdFromNotification(notification)
+    if (!requestId) {
+      alert('Unable to process this collaboration request. Please open the credentials page to respond.')
+      return
+    }
+
+    if (respondingCollabRequestIds.has(requestId)) {
+      return
+    }
+
+    try {
+      setRespondingCollabRequestIds(prev => new Set(prev).add(requestId))
+      await apiClient.respondCredentialCollaborationRequest(requestId, accept)
+      setPendingCollabRequestIds(prev => {
+        const updated = new Set(prev)
+        updated.delete(requestId)
+        return updated
+      })
+      if (!notification.read) {
+        handleMarkAsRead(notification.id)
+      }
+      await fetchNotifications()
+      await fetchUnreadCount()
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('refreshCredentials'))
+      }
+      if (accept) {
+        router.push('/credentials')
+      }
+      setIsNotificationOpen(false)
+    } catch (error: any) {
+      console.error('Failed to respond to collaboration request:', error)
+      alert(error.message || 'Failed to respond to collaboration request')
+    } finally {
+      setRespondingCollabRequestIds(prev => {
+        const updated = new Set(prev)
+        updated.delete(requestId)
+        return updated
       })
     }
   }
@@ -972,6 +1038,47 @@ export function Navbar() {
                                         </Button>
                                       </>
                                     )}
+                                  </div>
+                                )
+                              })()}
+                              {notification.link?.includes('collabRequest=') && (() => {
+                                const requestId = getCollabRequestIdFromNotification(notification)
+                                if (!requestId) return null
+                                const isProcessing = respondingCollabRequestIds.has(requestId)
+                                const isPending = pendingCollabRequestIds.has(requestId)
+                                if (!isPending) {
+                                  return (
+                                    <div className="mt-3 px-3 py-1.5 text-sm text-center bg-green-50 text-green-700 rounded-md border border-green-200">
+                                      Accepted
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <div className="flex gap-2 mt-3">
+                                    <Button
+                                      size="sm"
+                                      onClick={(e) => handleCollabRequestResponse(e, notification, true)}
+                                      className="flex-1"
+                                      disabled={isProcessing}
+                                    >
+                                      {isProcessing ? (
+                                        <>
+                                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                          Processing...
+                                        </>
+                                      ) : (
+                                        'Accept'
+                                      )}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => handleCollabRequestResponse(e, notification, false)}
+                                      className="flex-1"
+                                      disabled={isProcessing}
+                                    >
+                                      {isProcessing ? 'Please wait...' : 'Decline'}
+                                    </Button>
                                   </div>
                                 )
                               })()}

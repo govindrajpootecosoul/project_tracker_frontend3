@@ -32,6 +32,14 @@ interface TeamMember {
 
 export default function DashboardPage() {
   const router = useRouter()
+  const navigateToProjectTasks = useCallback((projectId: string, projectName?: string) => {
+    const params = new URLSearchParams()
+    params.set('projectId', projectId)
+    if (projectName) {
+      params.set('projectName', projectName)
+    }
+    router.push(`/tasks?${params.toString()}`)
+  }, [router])
   const [currentView, setCurrentView] = useState<'my' | 'department' | 'all-departments'>('my')
   const [userRole, setUserRole] = useState<string>('USER')
   const [stats, setStats] = useState({
@@ -254,11 +262,12 @@ export default function DashboardPage() {
 
   // Calculate percentages for projects
   const tasksByProjectData = projects
-    .map(project => ({
+    .map((project, index) => ({
+      id: project.id,
       name: project.name,
       value: project._count?.tasks || 0,
       icon: FolderKanban,
-      color: COLORS[projects.indexOf(project) % COLORS.length],
+      color: COLORS[index % COLORS.length],
     }))
     .filter(item => item.value > 0) // Only show projects with tasks
     .sort((a, b) => b.value - a.value) // Sort by task count descending
@@ -276,12 +285,19 @@ export default function DashboardPage() {
   const PercentageBarWidget = ({ 
     title, 
     data, 
-    total 
+    total,
+    onItemClick,
+    maxVisibleItems,
   }: { 
     title: string
-    data: Array<{ name: string; value: number; icon: any; color: string }>
+    data: Array<{ id?: string; name: string; value: number; icon: any; color: string }>
     total: number
+    onItemClick?: (item: { id?: string; name: string; value: number; icon: any; color: string }) => void
+    maxVisibleItems?: number
   }) => {
+    const listClassName = `space-y-4 ${maxVisibleItems ? 'overflow-y-auto pr-2' : ''}`
+    const listStyle = maxVisibleItems ? { maxHeight: `${maxVisibleItems * 68}px` } : undefined
+    
     return (
       <Card>
         <CardHeader>
@@ -289,12 +305,26 @@ export default function DashboardPage() {
           <CardDescription>Distribution across {title.toLowerCase()}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
+          <div className={listClassName} style={listStyle}>
             {data.map((item, index) => {
               const percentage = calculatePercentage(item.value, total)
               const Icon = item.icon
+              const isClickable = Boolean(onItemClick)
               return (
-                <div key={index} className="flex items-center gap-3">
+                <div
+                  key={index}
+                  className={`flex items-center gap-3 ${isClickable ? 'cursor-pointer rounded-md px-2 py-1 -mx-2 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background' : ''}`}
+                  onClick={() => onItemClick?.(item)}
+                  onKeyDown={(e) => {
+                    if (!onItemClick) return
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      onItemClick(item)
+                    }
+                  }}
+                  role={isClickable ? 'button' : undefined}
+                  tabIndex={isClickable ? 0 : undefined}
+                >
                   <div 
                     className="p-2 rounded-lg flex-shrink-0"
                     style={{ backgroundColor: `${item.color}20` }}
@@ -469,6 +499,12 @@ export default function DashboardPage() {
             title="Tasks by Project"
             data={tasksByProjectData}
             total={tasksByProjectData.reduce((sum, item) => sum + item.value, 0)}
+            maxVisibleItems={6}
+          onItemClick={(item) => {
+            if (item.id) {
+              navigateToProjectTasks(item.id, item.name)
+            }
+          }}
           />
         </div>
 

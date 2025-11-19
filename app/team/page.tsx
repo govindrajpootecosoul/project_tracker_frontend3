@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { MainLayout } from '@/components/layout/main-layout'
 import { apiClient } from '@/lib/api'
@@ -22,6 +22,8 @@ interface TeamMember {
   name?: string
   email: string
   department?: string
+  company?: string
+  employeeId?: string
   tasksAssigned: number
   projectsInvolved: number
   hasCredentialAccess?: boolean
@@ -50,6 +52,18 @@ interface TeamMember {
 
 type MemberRoleOption = 'USER' | 'ADMIN' | 'SUPER_ADMIN'
 
+interface MemberFormState {
+  name: string
+  email: string
+  password: string
+  department: string
+  company: string
+  employeeId: string
+  role: MemberRoleOption
+  hasCredentialAccess: boolean
+  hasSubscriptionAccess: boolean
+}
+
 const normalizeRoleForSelect = (role?: string): MemberRoleOption => {
   if (!role) return 'USER'
   const upper = role.toUpperCase().replace(/-/g, '_')
@@ -68,6 +82,18 @@ const formatRoleLabel = (role?: string) => {
   return labels[normalizeRoleForSelect(role)]
 }
 
+const getDefaultMemberForm = (): MemberFormState => ({
+  name: '',
+  email: '',
+  password: '',
+  department: '',
+  company: '',
+  employeeId: '',
+  role: 'USER',
+  hasCredentialAccess: false,
+  hasSubscriptionAccess: false,
+})
+
 const TEAM_MEMBERS_CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 interface TeamMembersCacheEntry {
   data: TeamMember[]
@@ -79,8 +105,8 @@ const getTeamMembersCacheKey = (department?: string, search?: string) => `${depa
 
 export default function TeamPage() {
   const router = useRouter()
+  const [allTeamMembers, setAllTeamMembers] = useState<TeamMember[]>(() => lastTeamMembersSnapshot ?? [])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>(() => lastTeamMembersSnapshot ?? [])
-  const [allUsers, setAllUsers] = useState<{ id: string; name?: string; email: string; department?: string }[]>([])
   const [departments, setDepartments] = useState<string[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [userRole, setUserRole] = useState<string>('USER')
@@ -89,6 +115,7 @@ export default function TeamPage() {
   const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all')
+  const [debouncedDepartment, setDebouncedDepartment] = useState<string>('all')
   const [searchInput, setSearchInput] = useState('') // User input
   const [searchQuery, setSearchQuery] = useState('') // Debounced search query
   const [isRefreshing, setIsRefreshing] = useState<boolean>(!lastTeamMembersSnapshot)
@@ -111,9 +138,16 @@ export default function TeamPage() {
   const [selectedMemberForRole, setSelectedMemberForRole] = useState<TeamMember | null>(null)
   const [roleSelection, setRoleSelection] = useState<MemberRoleOption>('USER')
   const [roleSaving, setRoleSaving] = useState(false)
+  const [isMemberFormOpen, setIsMemberFormOpen] = useState(false)
+  const [memberFormMode, setMemberFormMode] = useState<'create' | 'edit'>('create')
+  const [memberFormData, setMemberFormData] = useState<MemberFormState>(() => getDefaultMemberForm())
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null)
+  const [isSavingMember, setIsSavingMember] = useState(false)
+  const [memberFormError, setMemberFormError] = useState<string | null>(null)
   
-  // Debounce timer ref
+  // Debounce timer refs
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const departmentDebounceRef = useRef<NodeJS.Timeout | null>(null)
   const departmentMembersCacheRef = useRef<Record<string, TeamMember[]>>({})
   const departmentMembersInFlightRef = useRef<Record<string, Promise<TeamMember[]>>>({})
 
@@ -146,6 +180,26 @@ export default function TeamPage() {
     }
   }, [searchInput])
 
+  // Debounce department filter changes for API calls (but show immediate client-side filtering)
+  useEffect(() => {
+    // Clear previous timer
+    if (departmentDebounceRef.current) {
+      clearTimeout(departmentDebounceRef.current)
+    }
+
+    // Set new timer - debounce API calls but allow immediate client-side filtering
+    departmentDebounceRef.current = setTimeout(() => {
+      setDebouncedDepartment(selectedDepartment)
+    }, 500) // 500ms debounce for API calls
+
+    // Cleanup on unmount
+    return () => {
+      if (departmentDebounceRef.current) {
+        clearTimeout(departmentDebounceRef.current)
+      }
+    }
+  }, [selectedDepartment])
+
   const fetchUserRole = async () => {
     try {
       const user = await apiClient.getUserRole()
@@ -170,11 +224,11 @@ export default function TeamPage() {
     const params: { department?: string; search?: string } = {}
 
     if (isSuperAdmin) {
-      if (selectedDepartment !== 'all') {
-        params.department = selectedDepartment
+      if (debouncedDepartment !== 'all') {
+        params.department = debouncedDepartment
       }
     } else {
-      params.department = userDepartment || selectedDepartment
+      params.department = userDepartment || debouncedDepartment
     }
 
     if (trimmedSearch) {
@@ -186,6 +240,10 @@ export default function TeamPage() {
 
     const applyData = (data: TeamMember[]) => {
       lastTeamMembersSnapshot = data
+      // Store all members for client-side filtering when fetching all departments or no filter
+      if (!trimmedSearch && (debouncedDepartment === 'all' || !params.department || params.department === 'all')) {
+        setAllTeamMembers(data)
+      }
       setTeamMembers(data)
       if (!trimmedSearch) {
         teamMembersCacheStore[cacheKey] = {
@@ -239,7 +297,7 @@ export default function TeamPage() {
         setIsRefreshing(false)
       }
     }
-  }, [searchQuery, isSuperAdmin, selectedDepartment, userDepartment])
+  }, [searchQuery, isSuperAdmin, debouncedDepartment, userDepartment])
 
   const fetchDepartments = useCallback(async () => {
     try {
@@ -250,19 +308,42 @@ export default function TeamPage() {
     }
   }, [])
 
-  const fetchAllUsers = useCallback(async () => {
-    try {
-      // For search, don't filter by department - search across all users
-      const params: { department?: string; search?: string } = {}
-      if (searchQuery) params.search = searchQuery
-      // Don't send department filter for search - we want to search all users
-      
-      const data = await apiClient.getTeamUsers(params) as { id: string; name?: string; email: string; department?: string }[]
-      setAllUsers(data)
-    } catch (error) {
-      console.error('Failed to fetch users:', error)
+  // Client-side filtering for instant updates (before API call completes)
+  const filteredTeamMembers = useMemo(() => {
+    // Try to get cached "all" members from cache store if state doesn't have them
+    const allMembersCache = teamMembersCacheStore[getTeamMembersCacheKey('all', '')]
+    const availableAllMembers = allTeamMembers.length > 0 
+      ? allTeamMembers 
+      : (allMembersCache?.data || [])
+    
+    // If we have all members (from state or cache) and user is filtering by department, filter client-side for instant updates
+    if (selectedDepartment !== 'all' && availableAllMembers.length > 0 && !searchQuery.trim()) {
+      const normalizedFilter = selectedDepartment.trim().toLowerCase()
+      const filtered = availableAllMembers.filter(member => {
+        const memberDept = member.department?.trim().toLowerCase() || ''
+        return memberDept === normalizedFilter
+      })
+      // Return filtered results immediately, even if API call is still pending
+      return filtered
     }
-  }, [searchQuery])
+    // If filtering by 'all', use all members if available
+    if (selectedDepartment === 'all' && availableAllMembers.length > 0 && !searchQuery.trim()) {
+      return availableAllMembers
+    }
+    // Otherwise use the server-filtered results
+    return teamMembers
+  }, [allTeamMembers, teamMembers, selectedDepartment, searchQuery])
+
+  // Use filtered members for display (instant client-side filtering)
+  const displayMembers = useMemo(() => {
+    // If search is active, use server-filtered results
+    if (searchQuery.trim()) {
+      return teamMembers
+    }
+    // Otherwise use client-side filtered results for instant updates
+    return filteredTeamMembers
+  }, [filteredTeamMembers, teamMembers, searchQuery])
+
 
   const applyDepartmentMembersForLeave = useCallback((members: TeamMember[]) => {
     setDepartmentMembersForLeave(members)
@@ -360,7 +441,7 @@ export default function TeamPage() {
     return Array.from(uniqueTasks.values())
   }, [isAdmin])
 
-  // Fetch data when search query or department changes
+  // Fetch data when debounced search query or debounced department changes (for API calls)
   useEffect(() => {
     if (userRole && userDepartment !== undefined) {
       fetchTeamMembers()
@@ -369,14 +450,15 @@ export default function TeamPage() {
         fetchDepartments()
       }
     }
-  }, [selectedDepartment, searchQuery, userRole, userDepartment, fetchTeamMembers, fetchDepartments, departments.length])
+  }, [debouncedDepartment, searchQuery, userRole, userDepartment, fetchTeamMembers, fetchDepartments, departments.length])
 
-  // Fetch all users when invite dialog opens
+  // Also fetch all members when component loads or when switching to 'all' to enable client-side filtering
   useEffect(() => {
-    if (isInviteDialogOpen) {
-      fetchAllUsers()
+    if (userRole && userDepartment !== undefined && selectedDepartment === 'all' && isSuperAdmin && allTeamMembers.length === 0) {
+      // Fetch all members to enable client-side filtering
+      fetchTeamMembers({ force: false })
     }
-  }, [isInviteDialogOpen, fetchAllUsers])
+  }, [selectedDepartment, userRole, userDepartment, isSuperAdmin, allTeamMembers.length, fetchTeamMembers])
 
   const handleSendEmail = async () => {
     // Validate required fields
@@ -476,6 +558,112 @@ export default function TeamPage() {
     }
   }
 
+  const closeMemberForm = useCallback(() => {
+    setIsMemberFormOpen(false)
+    setEditingMemberId(null)
+    setMemberFormError(null)
+    setMemberFormData(getDefaultMemberForm())
+  }, [])
+
+  const openMemberForm = useCallback((mode: 'create' | 'edit', member?: TeamMember) => {
+    if (!isSuperAdmin) {
+      alert('Only super admins can manage team members.')
+      return
+    }
+    setMemberFormMode(mode)
+    if (mode === 'create' || !member) {
+      setMemberFormData(getDefaultMemberForm())
+      setEditingMemberId(null)
+    } else {
+      setMemberFormData({
+        name: member.name || '',
+        email: member.email,
+        password: '',
+        department: member.department || '',
+        company: member.company || '',
+        employeeId: member.employeeId || '',
+        role: normalizeRoleForSelect(member.role),
+        hasCredentialAccess: member.hasCredentialAccess ?? false,
+        hasSubscriptionAccess: member.hasSubscriptionAccess ?? false,
+      })
+      setEditingMemberId(member.id)
+    }
+    setMemberFormError(null)
+    setIsMemberFormOpen(true)
+  }, [isSuperAdmin])
+
+  const handleMemberFormSubmit = async () => {
+    if (!isSuperAdmin) {
+      alert('Only super admins can manage team members.')
+      return
+    }
+
+    const email = memberFormData.email.trim()
+    const password = memberFormData.password.trim()
+
+    if (!email) {
+      setMemberFormError('Email is required.')
+      return
+    }
+
+    if (memberFormMode === 'create' && !password) {
+      setMemberFormError('Password is required for new members.')
+      return
+    }
+
+    setMemberFormError(null)
+    setIsSavingMember(true)
+
+    try {
+      const payload: any = {
+        name: memberFormData.name.trim() || undefined,
+        email,
+        department: memberFormData.department.trim() || undefined,
+        company: memberFormData.company.trim() || undefined,
+        employeeId: memberFormData.employeeId.trim() || undefined,
+        role: memberFormData.role,
+        hasCredentialAccess: memberFormData.hasCredentialAccess,
+        hasSubscriptionAccess: memberFormData.hasSubscriptionAccess,
+      }
+
+      if (memberFormMode === 'create' || password) {
+        payload.password = password
+      }
+
+      if (memberFormMode === 'create') {
+        await apiClient.createTeamMember(payload)
+      } else if (editingMemberId) {
+        await apiClient.updateTeamMember(editingMemberId, payload)
+      }
+
+      await fetchTeamMembers({ force: true })
+      closeMemberForm()
+      alert(memberFormMode === 'create' ? 'Team member added successfully!' : 'Team member updated successfully!')
+    } catch (error: any) {
+      console.error('Failed to save team member:', error)
+      alert(error.message || 'Failed to save team member')
+    } finally {
+      setIsSavingMember(false)
+    }
+  }
+
+  const handleInviteTeamMember = async () => {
+    try {
+      const email = inviteEmail.trim()
+      if (!email) {
+        alert('Please enter an email address')
+        return
+      }
+      // Placeholder until invite API exists
+      alert(`Invitation sent to ${email}`)
+      setIsInviteDialogOpen(false)
+      setInviteEmail('')
+    } catch (error) {
+      console.error('Failed to invite team member:', error)
+      alert('Failed to invite team member')
+    }
+  }
+
   const handleDeactivateMember = async (member: TeamMember) => {
     if (normalizeRoleForSelect(member.role) === 'SUPER_ADMIN' && !isSuperAdmin) {
       alert('Only super admins can deactivate another super admin.')
@@ -510,24 +698,6 @@ export default function TeamPage() {
     }
   }
 
-  const handleInviteTeamMember = async () => {
-    try {
-      if (!inviteEmail || !inviteEmail.trim()) {
-        alert('Please enter an email address')
-        return
-      }
-      // TODO: Implement invite team member API endpoint
-      // For now, just show success message
-      alert(`Invitation sent to ${inviteEmail}`)
-      setIsInviteDialogOpen(false)
-      setInviteEmail('')
-      await fetchTeamMembers({ force: true })
-    } catch (error) {
-      console.error('Failed to invite team member:', error)
-      alert('Failed to invite team member')
-    }
-  }
-
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -542,33 +712,44 @@ export default function TeamPage() {
               </div>
             )}
           </div>
-          <Button onClick={() => {
-            setInviteEmail('')
-            setIsInviteDialogOpen(true)
-          }}>
-            <UserPlus className="h-4 w-4 mr-2" />
-            Invite Team Member
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setInviteEmail('')
+                setIsInviteDialogOpen(true)
+              }}
+            >
+              <Mail className="h-4 w-4 mr-2" />
+              Invite Team Member
+            </Button>
+            {isSuperAdmin && (
+              <Button onClick={() => openMemberForm('create')}>
+                <UserPlus className="h-4 w-4 mr-2" />
+                Add New Employee
+              </Button>
+            )}
+          </div>
           <Dialog open={isInviteDialogOpen} onOpenChange={setIsInviteDialogOpen}>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Invite Team Member</DialogTitle>
                 <DialogDescription>
-                  Enter an email address to invite a new team member to join your workspace.
+                  Enter an email address to invite a new teammate to the workspace.
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
                 <div>
-                  <Label htmlFor="inviteTeamEmail">Email Address</Label>
+                  <Label htmlFor="inviteEmail">Email Address</Label>
                   <Input
-                    id="inviteTeamEmail"
+                    id="inviteEmail"
                     type="email"
                     value={inviteEmail}
                     onChange={(e) => setInviteEmail(e.target.value)}
                     placeholder="user@example.com"
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    Enter email address to invite a new team member
+                    We’ll email them instructions to join your workspace.
                   </p>
                 </div>
                 <div className="flex justify-end gap-2">
@@ -577,7 +758,7 @@ export default function TeamPage() {
                   </Button>
                   <Button onClick={handleInviteTeamMember}>
                     <Mail className="h-4 w-4 mr-2" />
-                    Send Invitation
+                    Send Invite
                   </Button>
                 </div>
               </div>
@@ -660,7 +841,7 @@ export default function TeamPage() {
                   Fetching team members...
                 </CardContent>
               </Card>
-            ) : teamMembers.length === 0 ? (
+            ) : displayMembers.length === 0 ? (
               <Card>
                 <CardContent className="py-8 text-center text-muted-foreground">
                   {searchQuery ? 'No team members found matching your search.' : 'No team members found.'}
@@ -674,7 +855,7 @@ export default function TeamPage() {
                       Team Members
                       {searchQuery && (
                         <span className="text-sm font-normal text-muted-foreground ml-2">
-                          ({teamMembers.length} result{teamMembers.length !== 1 ? 's' : ''})
+                          ({displayMembers.length} result{displayMembers.length !== 1 ? 's' : ''})
                         </span>
                       )}
                     </CardTitle>
@@ -704,7 +885,7 @@ export default function TeamPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {teamMembers.map((member) => (
+                          {displayMembers.map((member) => (
                             <motion.tr
                               key={member.id}
                               initial={{ opacity: 0, y: 20 }}
@@ -814,19 +995,35 @@ export default function TeamPage() {
                               </td>
                               {isAdmin && (
                                 <td className="p-4">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    {/* Edit button - only show if user is not SUPER_ADMIN or current user is SUPER_ADMIN */}
-                                    {(!isSuperAdmin && normalizeRoleForSelect(member.role) === 'SUPER_ADMIN') ? null : (
-                                      <Button variant="outline" size="sm" onClick={() => openRoleDialog(member)}>
-                                        <Pencil className="h-4 w-4 mr-1" />
-                                        Edit
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    {isSuperAdmin ? (
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={() => openMemberForm('edit', member)}
+                                        title="Edit details"
+                                      >
+                                        <Pencil className="h-4 w-4" />
+                                        <span className="sr-only">Edit details</span>
                                       </Button>
+                                    ) : (
+                                      (!isSuperAdmin && normalizeRoleForSelect(member.role) === 'SUPER_ADMIN') ? null : (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          onClick={() => openRoleDialog(member)}
+                                          title="Edit role"
+                                        >
+                                          <Pencil className="h-4 w-4" />
+                                          <span className="sr-only">Edit role</span>
+                                        </Button>
+                                      )
                                     )}
-                                    {/* Delete button - only SUPER_ADMIN can delete SUPER_ADMIN */}
                                     {normalizeRoleForSelect(member.role) === 'SUPER_ADMIN' && !isSuperAdmin ? null : (
                                       <Button
-                                        variant="destructive"
-                                        size="sm"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="text-destructive hover:text-destructive"
                                         onClick={() => handleDeactivateMember(member)}
                                         disabled={
                                           member.id === currentUserId ||
@@ -840,8 +1037,8 @@ export default function TeamPage() {
                                               : 'Delete team member'
                                         }
                                       >
-                                        <Trash2 className="h-4 w-4 mr-1" />
-                                        Delete
+                                        <Trash2 className="h-4 w-4" />
+                                        <span className="sr-only">Delete</span>
                                       </Button>
                                     )}
                                   </div>
@@ -1202,6 +1399,151 @@ export default function TeamPage() {
             </div>
           </DialogContent>
         </Dialog>
+        {isSuperAdmin && (
+          <Dialog
+            open={isMemberFormOpen}
+            onOpenChange={(open) => {
+              if (!open) {
+                closeMemberForm()
+              } else {
+                setIsMemberFormOpen(true)
+              }
+            }}
+          >
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>{memberFormMode === 'create' ? 'Add New Employee' : 'Edit Team Member'}</DialogTitle>
+                <DialogDescription>
+                  {memberFormMode === 'create'
+                    ? 'Create a new workspace member and assign their role and permissions.'
+                    : 'Update the selected member’s profile, role, and permissions.'}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                {memberFormError && (
+                  <div className="rounded-md bg-destructive/10 border border-destructive px-3 py-2 text-sm text-destructive">
+                    {memberFormError}
+                  </div>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="memberName">Full Name</Label>
+                    <Input
+                      id="memberName"
+                      value={memberFormData.name}
+                      onChange={(e) => setMemberFormData(prev => ({ ...prev, name: e.target.value }))}
+                      placeholder="Enter full name"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="memberEmail">Email *</Label>
+                    <Input
+                      id="memberEmail"
+                      type="email"
+                      value={memberFormData.email}
+                      onChange={(e) => setMemberFormData(prev => ({ ...prev, email: e.target.value }))}
+                      placeholder="user@example.com"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="memberPassword">
+                    {memberFormMode === 'create' ? 'Password *' : 'Reset Password (optional)'}
+                  </Label>
+                  <Input
+                    id="memberPassword"
+                    type="password"
+                    value={memberFormData.password}
+                    onChange={(e) => setMemberFormData(prev => ({ ...prev, password: e.target.value }))}
+                    placeholder={memberFormMode === 'create' ? 'Minimum 6 characters' : 'Leave blank to keep existing'}
+                  />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="memberDepartment">Department</Label>
+                    <Input
+                      id="memberDepartment"
+                      value={memberFormData.department}
+                      onChange={(e) => setMemberFormData(prev => ({ ...prev, department: e.target.value }))}
+                      placeholder="Department name"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="memberCompany">Company</Label>
+                    <Input
+                      id="memberCompany"
+                      value={memberFormData.company}
+                      onChange={(e) => setMemberFormData(prev => ({ ...prev, company: e.target.value }))}
+                      placeholder="Company name"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="memberEmployeeId">Employee ID</Label>
+                    <Input
+                      id="memberEmployeeId"
+                      value={memberFormData.employeeId}
+                      onChange={(e) => setMemberFormData(prev => ({ ...prev, employeeId: e.target.value }))}
+                      placeholder="ECOSIND0178"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="memberRole">Role</Label>
+                    <Select
+                      value={memberFormData.role}
+                      onValueChange={(value) => setMemberFormData(prev => ({ ...prev, role: value as MemberRoleOption }))}
+                    >
+                      <SelectTrigger id="memberRole">
+                        <SelectValue placeholder="Select role" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="USER">User</SelectItem>
+                        <SelectItem value="ADMIN">Admin</SelectItem>
+                        <SelectItem value="SUPER_ADMIN">Super Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="flex items-center justify-between rounded-lg border p-3">
+                    <div>
+                      <p className="font-medium text-sm">Credential Access</p>
+                      <p className="text-xs text-muted-foreground">Allow access to credential manager</p>
+                    </div>
+                    <Switch
+                      checked={memberFormData.hasCredentialAccess}
+                      onCheckedChange={(checked) =>
+                        setMemberFormData(prev => ({ ...prev, hasCredentialAccess: checked }))
+                      }
+                    />
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border p-3">
+                    <div>
+                      <p className="font-medium text-sm">Subscription Access</p>
+                      <p className="text-xs text-muted-foreground">Allow access to subscription manager</p>
+                    </div>
+                    <Switch
+                      checked={memberFormData.hasSubscriptionAccess}
+                      onCheckedChange={(checked) =>
+                        setMemberFormData(prev => ({ ...prev, hasSubscriptionAccess: checked }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={closeMemberForm} disabled={isSavingMember}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleMemberFormSubmit} disabled={isSavingMember}>
+                    {isSavingMember && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    {memberFormMode === 'create' ? 'Add Member' : 'Save Changes'}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
     </MainLayout>
   )

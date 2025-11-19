@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { MainLayout } from '@/components/layout/main-layout'
 import { apiClient } from '@/lib/api'
 import { getToken } from '@/lib/auth-client'
@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { motion } from 'framer-motion'
-import { Plus, Edit, Trash2, MessageSquare, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, Users, X } from 'lucide-react'
+import { Plus, Edit, Trash2, MessageSquare, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, Users, X, Loader2, MoreVertical } from 'lucide-react'
 import { format } from 'date-fns'
 import type { TaskComment } from '@/types/comments'
 
@@ -30,6 +30,7 @@ interface Task {
   description?: string
   status: TaskStatus
   priority: TaskPriority
+  startDate?: string
   dueDate?: string
   projectId?: string
   brand?: string
@@ -50,6 +51,7 @@ interface Task {
     id: string
     name: string
     brand?: string
+    department?: string
   } | null
   comments?: TaskComment[]
 }
@@ -67,6 +69,7 @@ interface FormData {
   description: string
   status: TaskStatus
   priority: TaskPriority
+  startDate: string
   dueDate: string
   projectId: string
   brand: string
@@ -82,21 +85,25 @@ interface TeamMemberInfo {
   department?: string
 }
 
-const initialFormData: FormData = {
+const createInitialFormData = (): FormData => ({
   title: '',
   description: '',
   status: 'IN_PROGRESS',
   priority: 'MEDIUM',
+  startDate: format(new Date(), 'yyyy-MM-dd'),
   dueDate: '',
   projectId: '',
   brand: '',
   tags: '',
   recurring: '',
   assigneeId: '',
-}
+})
+
+const initialFormData: FormData = createInitialFormData()
 
 export default function TasksPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [tasks, setTasks] = useState<Task[]>([])
   const [teamTasks, setTeamTasks] = useState<Task[]>([])
   const [reviewTasks, setReviewTasks] = useState<Task[]>([])
@@ -130,6 +137,38 @@ export default function TasksPage() {
   const [taskSearchQuery, setTaskSearchQuery] = useState('') // Search query for tasks
   const commentsContainerRef = useRef<HTMLDivElement | null>(null)
   const lastCommentCountRef = useRef<number>(0)
+  const [isSavingTask, setIsSavingTask] = useState(false)
+  const [openActionTaskId, setOpenActionTaskId] = useState<string | null>(null)
+  const projectFilter = searchParams.get('projectId')
+  const projectFilterName = searchParams.get('projectName')
+  const [departmentFilter, setDepartmentFilter] = useState<string>('all')
+  const [departments, setDepartments] = useState<string[]>([])
+  const [otherDepartmentTasks, setOtherDepartmentTasks] = useState<Task[]>([])
+  const [isLoadingOtherDept, setIsLoadingOtherDept] = useState(false)
+  
+  const clearProjectFilter = useCallback(() => {
+    router.push('/tasks')
+  }, [router])
+  const matchesProjectFilter = useCallback(
+    (task: Task) => {
+      if (!projectFilter) return true
+      return task.projectId === projectFilter || task.project?.id === projectFilter
+    },
+    [projectFilter],
+  )
+
+  const matchesDepartmentFilter = useCallback(
+    (task: Task) => {
+      if (departmentFilter === 'all') return true
+      const taskDepartment = task.project?.department?.trim().toLowerCase()
+      const filterDepartment = departmentFilter.trim().toLowerCase()
+      return taskDepartment === filterDepartment
+    },
+    [departmentFilter],
+  )
+
+  const isSuperAdminUser = user?.role?.toUpperCase() === 'SUPER_ADMIN'
+  const showOtherDeptTab = isSuperAdminUser && (isLoadingOtherDept || otherDepartmentTasks.length > 0)
 
   const teamMemberLookup = useMemo(() => {
     const map = new Map<string, TeamMemberInfo>()
@@ -198,8 +237,8 @@ export default function TasksPage() {
       taskMap.set(task.id, task)
     })
 
-    return Array.from(taskMap.values())
-  }, [teamTasks, teamTaskStatusFilter, teamMemberFilter, teamMemberLookup, user?.department, user?.role, taskSearchQuery])
+    return Array.from(taskMap.values()).filter(matchesProjectFilter).filter(matchesDepartmentFilter)
+  }, [teamTasks, teamTaskStatusFilter, teamMemberFilter, teamMemberLookup, user?.department, user?.role, taskSearchQuery, matchesProjectFilter, matchesDepartmentFilter])
 
   useEffect(() => {
     if (teamMemberFilter === 'all') return
@@ -208,6 +247,12 @@ export default function TasksPage() {
       setTeamMemberFilter('all')
     }
   }, [availableTeamMembers, teamMemberFilter])
+
+  useEffect(() => {
+    if (activeTab === 'otherDept' && !showOtherDeptTab) {
+      setActiveTab('my')
+    }
+  }, [activeTab, showOtherDeptTab])
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -233,6 +278,34 @@ export default function TasksPage() {
     }
   }, [])
 
+  const fetchOtherDepartmentTasks = useCallback(async () => {
+    if (!isSuperAdminUser) {
+      setOtherDepartmentTasks([])
+      return
+    }
+    setIsLoadingOtherDept(true)
+    try {
+      const allDeptTasks = await apiClient.getAllDepartmentsTasks()
+      const userDept = user?.department?.trim().toLowerCase()
+      const filtered = (allDeptTasks as Task[]).filter((task) => {
+        const projectDept = task.project?.department?.trim().toLowerCase()
+        if (!projectDept) return false
+        if (!userDept) return true
+        return projectDept !== userDept
+      })
+      setOtherDepartmentTasks(filtered)
+    } catch (error) {
+      console.error('Failed to fetch other department tasks:', error)
+      setOtherDepartmentTasks([])
+    } finally {
+      setIsLoadingOtherDept(false)
+    }
+  }, [isSuperAdminUser, user?.department, tasks.length, teamTasks.length])
+
+  useEffect(() => {
+    fetchOtherDepartmentTasks()
+  }, [fetchOtherDepartmentTasks])
+
   const fetchProjects = useCallback(async () => {
     try {
       const projectsData = await apiClient.getProjects()
@@ -257,6 +330,15 @@ export default function TasksPage() {
       setAllUsers(usersData as { id: string; name?: string; email: string }[])
     } catch (error) {
       console.error('Failed to fetch all users:', error)
+    }
+  }, [])
+
+  const fetchDepartments = useCallback(async () => {
+    try {
+      const departmentsData = await apiClient.getDepartments()
+      setDepartments(departmentsData as string[])
+    } catch (error) {
+      console.error('Failed to fetch departments:', error)
     }
   }, [])
 
@@ -306,6 +388,7 @@ export default function TasksPage() {
     fetchTasks()
     fetchProjects()
     fetchTeamMembers()
+    fetchDepartments()
     fetchAllUsers()
     
     // Listen for refresh events from navbar
@@ -363,7 +446,7 @@ export default function TasksPage() {
   }, [tasks, teamTasks, projects])
 
   const resetForm = useCallback(() => {
-    setFormData(initialFormData)
+    setFormData(createInitialFormData())
     setEditingTask(null)
   }, [])
 
@@ -401,6 +484,7 @@ export default function TasksPage() {
       description: task.description || '',
       status: task.status,
       priority: task.priority,
+      startDate: task.startDate ? format(new Date(task.startDate), 'yyyy-MM-dd') : '',
       dueDate: task.dueDate ? format(new Date(task.dueDate), 'yyyy-MM-dd') : '',
       projectId: task.projectId || '',
       brand: task.brand || '',
@@ -445,17 +529,21 @@ export default function TasksPage() {
   }, [resetForm])
 
   const handleCreateTask = useCallback(async () => {
+    if (isSavingTask) return
     try {
       if (!formData.title.trim()) {
         alert('Task title is required')
         return
       }
 
+      setIsSavingTask(true)
+
       const cleanData: any = {
         title: formData.title.trim(),
         description: formData.description?.trim() || null,
         status: formData.status,
         priority: formData.priority,
+        startDate: formData.startDate && formData.startDate.trim() !== '' ? formData.startDate : null,
         dueDate: formData.dueDate && formData.dueDate.trim() !== '' ? formData.dueDate : null,
         projectId: formData.projectId && formData.projectId.trim() !== '' ? formData.projectId.trim() : null,
         brand: formData.brand?.trim() || null,
@@ -481,11 +569,14 @@ export default function TasksPage() {
     } catch (error: any) {
       console.error('Failed to create task:', error)
       alert(error.message || 'Failed to create task')
+    } finally {
+      setIsSavingTask(false)
     }
-  }, [formData, closeDialog, fetchTasks, fetchProjects, user?.role])
+  }, [formData, closeDialog, fetchTasks, fetchProjects, user?.role, isSavingTask])
 
   const handleUpdateTask = useCallback(async () => {
     if (!editingTask) return
+    if (isSavingTask) return
 
     try {
       if (!formData.title.trim()) {
@@ -493,11 +584,14 @@ export default function TasksPage() {
         return
       }
 
+      setIsSavingTask(true)
+
       const cleanData: any = {
         title: formData.title.trim(),
         description: formData.description?.trim() || null,
         status: formData.status,
         priority: formData.priority,
+        startDate: formData.startDate && formData.startDate.trim() !== '' ? formData.startDate : null,
         dueDate: formData.dueDate && formData.dueDate.trim() !== '' ? formData.dueDate : null,
         projectId: formData.projectId && formData.projectId.trim() !== '' ? formData.projectId.trim() : null,
         brand: formData.brand?.trim() || null,
@@ -525,8 +619,10 @@ export default function TasksPage() {
     } catch (error: any) {
       console.error('Failed to update task:', error)
       alert(error.message || 'Failed to update task')
+    } finally {
+      setIsSavingTask(false)
     }
-  }, [editingTask, formData, closeDialog, fetchTasks, fetchProjects, user?.role])
+  }, [editingTask, formData, closeDialog, fetchTasks, fetchProjects, user?.role, isSavingTask])
 
   const handleDeleteTask = useCallback(async (taskId: string) => {
     if (!confirm('Are you sure you want to delete this task?')) return
@@ -853,12 +949,13 @@ export default function TasksPage() {
 
   const handleFormSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    if (isSavingTask) return
     if (editingTask) {
       handleUpdateTask()
     } else {
       handleCreateTask()
     }
-  }, [editingTask, handleUpdateTask, handleCreateTask])
+  }, [editingTask, handleUpdateTask, handleCreateTask, isSavingTask])
 
   const updateFormField = useCallback(<K extends keyof FormData>(field: K, value: FormData[K]) => {
     setFormData(prev => ({ ...prev, [field]: value }))
@@ -884,6 +981,100 @@ export default function TasksPage() {
     return colors[priority] || colors.MEDIUM
   }
 
+  const renderTaskActions = (task: Task) => {
+    const actionItemClass =
+      'flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors hover:bg-black hover:text-white'
+    const disabledActionClass = 'disabled:opacity-50 disabled:hover:bg-black/80 disabled:hover:text-white'
+
+    return (
+    <Popover open={openActionTaskId === task.id} onOpenChange={(open) => setOpenActionTaskId(open ? task.id : null)}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Task actions"
+          className="text-muted-foreground hover:bg-black hover:text-white"
+        >
+          <MoreVertical className="h-4 w-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-2" align="end">
+        <div className="space-y-1">
+          <div className="text-xs font-semibold text-muted-foreground px-2 py-1">Task Options</div>
+          <button
+            onClick={() => {
+              openCommentDialog(task)
+              setOpenActionTaskId(null)
+            }}
+            className={actionItemClass}
+          >
+            <MessageSquare className="h-4 w-4" />
+            Comments & Chat
+          </button>
+          {task.reviewStatus !== 'REVIEW_REQUESTED' && (
+            <button
+              onClick={() => {
+                openReviewDialog(task)
+                setOpenActionTaskId(null)
+              }}
+              className={actionItemClass}
+            >
+              <Users className="h-4 w-4" />
+              Request Review
+            </button>
+          )}
+          {task.reviewStatus === 'REVIEW_REQUESTED' && task.reviewerId === user?.id && (
+            <>
+              <button
+                onClick={() => {
+                  handleAcceptReviewRequest(task.id)
+                  setOpenActionTaskId(null)
+                }}
+                disabled={acceptingTaskId === task.id}
+                className={`${actionItemClass} ${disabledActionClass}`}
+              >
+                <CheckCircle2 className="h-4 w-4 text-green-600" />
+                Accept Review Request
+              </button>
+              <button
+                onClick={() => {
+                  handleCancelReviewRequest(task.id)
+                  setOpenActionTaskId(null)
+                }}
+                disabled={cancellingTaskId === task.id}
+                className={`${actionItemClass} ${disabledActionClass}`}
+              >
+                <X className="h-4 w-4 text-red-600" />
+                Cancel Review Request
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => {
+              openEditDialog(task)
+              setOpenActionTaskId(null)
+            }}
+            className={actionItemClass}
+          >
+            <Edit className="h-4 w-4" />
+            Edit Task
+          </button>
+          <button
+            onClick={() => {
+              handleDeleteTask(task.id)
+              setOpenActionTaskId(null)
+            }}
+            className={`${actionItemClass} text-red-600`}
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete Task
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+    )
+  }
+
   const TaskCard = ({ task }: { task: Task }) => (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -900,64 +1091,7 @@ export default function TasksPage() {
                 <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{task.description}</p>
               )}
             </div>
-            <div className="flex gap-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => openCommentDialog(task)}
-                title="Comments"
-              >
-                <MessageSquare className="h-4 w-4" />
-              </Button>
-              {task.reviewStatus !== 'REVIEW_REQUESTED' && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => openReviewDialog(task)}
-                  title="Request Review"
-                >
-                  <Users className="h-4 w-4" />
-                </Button>
-              )}
-              {task.reviewStatus === 'REVIEW_REQUESTED' && task.reviewerId === user?.id && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleAcceptReviewRequest(task.id)}
-                    title="Accept Review Request"
-                    className="text-green-600 hover:text-green-700"
-                    disabled={acceptingTaskId === task.id}
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleCancelReviewRequest(task.id)}
-                    title="Cancel Review Request"
-                    className="text-red-600 hover:text-red-700"
-                    disabled={cancellingTaskId === task.id}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </>
-              )}
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => openEditDialog(task)}
-              >
-                <Edit className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => handleDeleteTask(task.id)}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
+            {renderTaskActions(task)}
           </div>
         </CardHeader>
         <CardContent className="flex-1 flex flex-col">
@@ -1019,10 +1153,16 @@ export default function TasksPage() {
             )}
           </div>
           <div className="flex items-center gap-4 text-sm text-muted-foreground flex-shrink-0 mb-3">
+            {task.startDate && (
+              <div className="flex items-center gap-1">
+                <Calendar className="h-4 w-4" />
+                <span>Start: {format(new Date(task.startDate), 'MMM dd, yyyy')}</span>
+              </div>
+            )}
             {task.dueDate && (
               <div className="flex items-center gap-1">
                 <Calendar className="h-4 w-4" />
-                {format(new Date(task.dueDate), 'MMM dd, yyyy')}
+                <span>Due: {format(new Date(task.dueDate), 'MMM dd, yyyy')}</span>
               </div>
             )}
             {task.assignees.length > 0 && (
@@ -1065,6 +1205,8 @@ export default function TasksPage() {
         task.project?.name.toLowerCase().includes(query)
       )
     }
+
+    filtered = filtered.filter(matchesProjectFilter).filter(matchesDepartmentFilter)
 
     // Sort based on selected sort type
     const sorted = [...filtered].sort((a, b) => {
@@ -1110,10 +1252,12 @@ export default function TasksPage() {
       return matches
     })
     
+    let results = filtered
+
     // Apply search filter
     if (taskSearchQuery.trim()) {
       const query = taskSearchQuery.toLowerCase().trim()
-      return filtered.filter(task => 
+      results = filtered.filter(task => 
         task.title.toLowerCase().includes(query) ||
         task.description?.toLowerCase().includes(query) ||
         task.brand?.toLowerCase().includes(query) ||
@@ -1132,17 +1276,20 @@ export default function TasksPage() {
         reviewerId: t.reviewerId,
       })),
     })
-    return filtered
-  }, [reviewTasks, user?.id, taskSearchQuery])
+    return results.filter(matchesProjectFilter).filter(matchesDepartmentFilter)
+  }, [reviewTasks, user?.id, taskSearchQuery, matchesProjectFilter, matchesDepartmentFilter])
 
   const renderTasks = (tasksToRender: Task[], sortType: 'default' | 'alphabetical' = 'default') => {
     const filteredAndSorted = getFilteredAndSortedTasks(tasksToRender, sortType, taskSearchQuery)
 
-    if (tasksToRender.length === 0) {
+    if (filteredAndSorted.length === 0) {
+      const emptyMessage = projectFilter
+        ? `No tasks found for ${projectFilterName || 'the selected project'}.`
+        : 'No tasks found. Create your first task!'
       return (
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">
-            No tasks found. Create your first task!
+            {emptyMessage}
           </CardContent>
         </Card>
       )
@@ -1195,6 +1342,7 @@ export default function TasksPage() {
                   <th className="text-left p-4">Status</th>
                   <th className="text-left p-4">Priority</th>
                   <th className="text-left p-4">Project</th>
+                  <th className="text-left p-4">Start Date</th>
                   <th className="text-left p-4">Due Date</th>
                   <th className="text-left p-4">Actions</th>
                 </tr>
@@ -1275,67 +1423,13 @@ export default function TasksPage() {
                       )}
                     </td>
                     <td className="p-4">
+                      {task.startDate ? format(new Date(task.startDate), 'MMM dd, yyyy') : '-'}
+                    </td>
+                    <td className="p-4">
                       {task.dueDate ? format(new Date(task.dueDate), 'MMM dd, yyyy') : '-'}
                     </td>
                     <td className="p-4">
-                      <div className="flex gap-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => openCommentDialog(task)}
-                          title="Comments"
-                        >
-                          <MessageSquare className="h-4 w-4" />
-                        </Button>
-                        {task.reviewStatus !== 'REVIEW_REQUESTED' && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => openReviewDialog(task)}
-                            title="Request Review"
-                          >
-                            <Users className="h-4 w-4" />
-                          </Button>
-                        )}
-                        {task.reviewStatus === 'REVIEW_REQUESTED' && task.reviewerId === user?.id && (
-                          <>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleAcceptReviewRequest(task.id)}
-                              title="Accept Review Request"
-                              className="text-green-600 hover:text-green-700"
-                              disabled={acceptingTaskId === task.id}
-                            >
-                              <CheckCircle2 className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleCancelReviewRequest(task.id)}
-                              title="Cancel Review Request"
-                              className="text-red-600 hover:text-red-700"
-                              disabled={cancellingTaskId === task.id}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => openEditDialog(task)}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDeleteTask(task.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                      {renderTaskActions(task)}
                     </td>
                   </tr>
                 ))}
@@ -1397,6 +1491,22 @@ export default function TasksPage() {
                   {availableTeamMembers.map((member) => (
                     <SelectItem key={member.id} value={member.id}>
                       {member.name || member.email}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label>Department</Label>
+              <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+                <SelectTrigger className="w-48">
+                  <SelectValue placeholder="All Departments" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Departments</SelectItem>
+                  {departments.map((dept) => (
+                    <SelectItem key={dept} value={dept}>
+                      {dept}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1537,6 +1647,16 @@ export default function TasksPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
+                  <Label htmlFor="startDate">Start Date</Label>
+                  <Input
+                    id="startDate"
+                    name="startDate"
+                    type="date"
+                    value={formData.startDate}
+                    onChange={(e) => updateFormField('startDate', e.target.value)}
+                  />
+                </div>
+                <div>
                   <Label htmlFor="dueDate">Due Date</Label>
                   <Input
                     id="dueDate"
@@ -1546,29 +1666,29 @@ export default function TasksPage() {
                     onChange={(e) => updateFormField('dueDate', e.target.value)}
                   />
                 </div>
-                <div>
-                  <Label htmlFor="recurring">Recurring</Label>
-                  <Select
-                    value={formData.recurring || 'none'}
-                    onValueChange={(value) => {
-                      const recurringValue = value === 'none' ? '' : value as RecurringType
-                      updateFormField('recurring', recurringValue)
-                      if (recurringValue !== '') {
-                        updateFormField('status', 'RECURRING')
-                      }
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="None" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      <SelectItem value="DAILY">Daily</SelectItem>
-                      <SelectItem value="WEEKLY">Weekly</SelectItem>
-                      <SelectItem value="MONTHLY">Monthly</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+              </div>
+              <div>
+                <Label htmlFor="recurring">Recurring</Label>
+                <Select
+                  value={formData.recurring || 'none'}
+                  onValueChange={(value) => {
+                    const recurringValue = value === 'none' ? '' : value as RecurringType
+                    updateFormField('recurring', recurringValue)
+                    if (recurringValue !== '') {
+                      updateFormField('status', 'RECURRING')
+                    }
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="None" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="DAILY">Daily</SelectItem>
+                    <SelectItem value="WEEKLY">Weekly</SelectItem>
+                    <SelectItem value="MONTHLY">Monthly</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -1756,13 +1876,34 @@ export default function TasksPage() {
                 >
                   Cancel
                 </Button>
-                <Button type="submit">
-                  {editingTask ? 'Update' : 'Create'}
+                <Button type="submit" disabled={isSavingTask} className="min-w-[120px]">
+                  {isSavingTask ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {editingTask ? 'Saving...' : 'Creating...'}
+                    </>
+                  ) : (
+                    editingTask ? 'Update' : 'Create'
+                  )}
                 </Button>
               </div>
             </form>
           </DialogContent>
         </Dialog>
+
+        {projectFilter && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
+            <div>
+              <p className="text-sm text-muted-foreground">Filtering tasks by project</p>
+              <p className="font-semibold text-primary">
+                {projectFilterName || 'Selected Project'}
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" onClick={clearProjectFilter}>
+              Clear Filter
+            </Button>
+          </div>
+        )}
 
         {/* Comment Dialog */}
         <Dialog open={isCommentDialogOpen} onOpenChange={(open) => {
@@ -1935,6 +2076,7 @@ export default function TasksPage() {
             <TabsTrigger value="my">My Tasks</TabsTrigger>
             <TabsTrigger value="team">Team Tasks</TabsTrigger>
             <TabsTrigger value="review">Under Review</TabsTrigger>
+            {showOtherDeptTab && <TabsTrigger value="otherDept">Other Department</TabsTrigger>}
           </TabsList>
           <TabsContent value="my" className="space-y-4">
             <div className="flex items-center justify-between gap-2 mb-4">
@@ -1945,6 +2087,20 @@ export default function TasksPage() {
                 className="w-64"
               />
               <div className="flex items-center gap-2">
+                <Label htmlFor="department-filter" className="text-sm">Department:</Label>
+                <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+                  <SelectTrigger id="department-filter" className="w-48">
+                    <SelectValue placeholder="All Departments" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Departments</SelectItem>
+                    {departments.map((dept) => (
+                      <SelectItem key={dept} value={dept}>
+                        {dept}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Label htmlFor="sort-select" className="text-sm">Sort by:</Label>
                 <Select value={myTasksSort} onValueChange={(value) => setMyTasksSort(value as 'default' | 'alphabetical')}>
                   <SelectTrigger id="sort-select" className="w-48">
@@ -1963,16 +2119,81 @@ export default function TasksPage() {
             {renderTeamTasks()}
           </TabsContent>
           <TabsContent value="review" className="space-y-4">
-            <div className="mb-4">
+            <div className="flex items-center justify-between gap-2 mb-4">
               <Input
                 placeholder="Search tasks by title, description, brand, tags, or project..."
                 value={taskSearchQuery}
                 onChange={(e) => setTaskSearchQuery(e.target.value)}
                 className="w-64"
               />
+              <div className="flex items-center gap-2">
+                <Label htmlFor="department-filter-review" className="text-sm">Department:</Label>
+                <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+                  <SelectTrigger id="department-filter-review" className="w-48">
+                    <SelectValue placeholder="All Departments" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Departments</SelectItem>
+                    {departments.map((dept) => (
+                      <SelectItem key={dept} value={dept}>
+                        {dept}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             {renderTasks(getUnderReviewTasks())}
           </TabsContent>
+          {showOtherDeptTab && (
+            <TabsContent value="otherDept" className="space-y-4">
+              <div className="flex items-center justify-between gap-2 mb-4">
+                <Input
+                  placeholder="Search tasks by title, description, brand, tags, or project..."
+                  value={taskSearchQuery}
+                  onChange={(e) => setTaskSearchQuery(e.target.value)}
+                  className="w-64"
+                />
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="department-filter-other" className="text-sm">Department:</Label>
+                  <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+                    <SelectTrigger id="department-filter-other" className="w-48">
+                      <SelectValue placeholder="All Departments" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Departments</SelectItem>
+                      {departments.map((dept) => (
+                        <SelectItem key={dept} value={dept}>
+                          {dept}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <div className="text-sm text-muted-foreground">
+                    {isLoadingOtherDept
+                      ? 'Loading tasks from other departments...'
+                      : `Showing ${otherDepartmentTasks.length} task${otherDepartmentTasks.length !== 1 ? 's' : ''}`}
+                  </div>
+                </div>
+              </div>
+              {isLoadingOtherDept ? (
+                <Card>
+                  <CardContent className="py-8 text-center text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
+                    Loading other department tasks...
+                  </CardContent>
+                </Card>
+              ) : otherDepartmentTasks.length === 0 ? (
+                <Card>
+                  <CardContent className="py-8 text-center text-muted-foreground">
+                    No tasks from other departments are available right now.
+                  </CardContent>
+                </Card>
+              ) : (
+                renderTasks(otherDepartmentTasks)
+              )}
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </MainLayout>

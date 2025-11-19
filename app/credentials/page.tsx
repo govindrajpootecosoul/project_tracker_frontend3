@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { MainLayout } from '@/components/layout/main-layout'
 import { apiClient } from '@/lib/api'
@@ -13,10 +13,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { motion } from 'framer-motion'
-import { Plus, Edit, Trash2, Users as UsersIcon, Download, Eye, EyeOff, Copy, Check, CreditCard } from 'lucide-react'
+import { Plus, Edit, Trash2, Users as UsersIcon, Download, Eye, EyeOff, Copy, Check, CreditCard, Loader2 } from 'lucide-react'
 import { format } from 'date-fns'
 
 interface Credential {
@@ -52,6 +53,23 @@ interface User {
   id: string
   name?: string
   email: string
+}
+
+interface CollaborationSummaryEntry {
+  memberId: string
+  memberName: string
+  memberEmail: string
+  action: 'created' | 'updated' | 'skipped'
+  credentialCount: number
+  note?: string
+}
+
+interface CollaborationSummary {
+  created: number
+  updated: number
+  skipped: number
+  inaccessibleCredentialCount?: number
+  details: CollaborationSummaryEntry[]
 }
 
 interface FormData {
@@ -90,13 +108,26 @@ export default function CredentialsPage() {
   const [showPasswords, setShowPasswords] = useState<{ [key: string]: boolean }>({})
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [currentUser, setCurrentUser] = useState<{ id: string; name?: string; email?: string } | null>(null)
+  const [isBulkCollabDialogOpen, setIsBulkCollabDialogOpen] = useState(false)
+  const [selectedCredentialIds, setSelectedCredentialIds] = useState<string[]>([])
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([])
+  const [isSubmittingBulkCollab, setIsSubmittingBulkCollab] = useState(false)
+  const [collabSummary, setCollabSummary] = useState<CollaborationSummary | null>(null)
+  const [isCollabSummaryDialogOpen, setIsCollabSummaryDialogOpen] = useState(false)
+  const [memberSearch, setMemberSearch] = useState('')
+  const [collabDialogTab, setCollabDialogTab] = useState<'invite' | 'manage'>('invite')
+  const [expandedManageCredentialId, setExpandedManageCredentialId] = useState<string | null>(null)
+  const [removingMemberKey, setRemovingMemberKey] = useState<string | null>(null)
 
-  const fetchCredentials = useCallback(async () => {
+  const fetchCredentials = useCallback(async (): Promise<Credential[]> => {
     try {
       const data = await apiClient.getCredentials()
       setCredentials(data as Credential[])
+      return data as Credential[]
     } catch (error) {
       console.error('Failed to fetch credentials:', error)
+      return []
     }
   }, [])
 
@@ -121,6 +152,28 @@ export default function CredentialsPage() {
     },
   ]
 
+  const publicCredentials = useMemo(
+    () => credentials.filter((credential) => credential.privacyLevel === 'PUBLIC'),
+    [credentials],
+  )
+
+  const totalCollaborationMembers = useMemo(
+    () => publicCredentials.reduce((total, credential) => total + credential.members.length, 0),
+    [publicCredentials],
+  )
+
+  const filteredMembers = useMemo(() => {
+    const search = memberSearch.trim().toLowerCase()
+    return allUsers
+      .filter((user) => user.id !== currentUser?.id)
+      .filter((user) => {
+        if (!search) return true
+        const nameMatch = user.name?.toLowerCase().includes(search)
+        const emailMatch = user.email.toLowerCase().includes(search)
+        return Boolean(nameMatch || emailMatch)
+      })
+  }, [allUsers, currentUser?.id, memberSearch])
+
   const fetchUsers = useCallback(async () => {
     try {
       const data = await apiClient.getTeamUsers()
@@ -140,6 +193,9 @@ export default function CredentialsPage() {
     const checkAccess = async () => {
       try {
         const user = await apiClient.getUserRole()
+        if (user?.id) {
+          setCurrentUser({ id: user.id, name: user.name, email: user.email })
+        }
         const isAdmin = user.role === 'ADMIN' || user.role === 'SUPER_ADMIN'
         const hasAccess = isAdmin || user.hasCredentialAccess === true
         
@@ -158,6 +214,17 @@ export default function CredentialsPage() {
     fetchCredentials()
     fetchUsers()
   }, [router, fetchCredentials, fetchUsers])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handler = () => {
+      fetchCredentials()
+    }
+    window.addEventListener('refreshCredentials', handler as EventListener)
+    return () => {
+      window.removeEventListener('refreshCredentials', handler as EventListener)
+    }
+  }, [fetchCredentials])
 
   const resetForm = useCallback(() => {
     setFormData(initialFormData)
@@ -262,21 +329,33 @@ export default function CredentialsPage() {
     }
   }, [selectedCredential, fetchCredentials])
 
-  const handleRemoveMember = useCallback(async (memberId: string) => {
-    if (!selectedCredential) return
-    
-    if (!confirm('Are you sure you want to remove this member?')) {
-      return
-    }
-    
-    try {
-      await apiClient.removeCredentialMember(selectedCredential.id, memberId)
-      await fetchCredentials()
-    } catch (error: any) {
-      console.error('Failed to remove member:', error)
-      alert(error.message || 'Failed to remove member')
-    }
-  }, [selectedCredential, fetchCredentials])
+  const handleRemoveMember = useCallback(
+    async (credentialId: string, memberId: string, options?: { skipConfirm?: boolean }) => {
+      if (!credentialId || !memberId) return
+
+      if (!options?.skipConfirm) {
+        const confirmed = window.confirm('Are you sure you want to remove this member?')
+        if (!confirmed) return
+      }
+
+      try {
+        const key = `${credentialId}:${memberId}`
+        setRemovingMemberKey(key)
+        await apiClient.removeCredentialMember(credentialId, memberId)
+        const updatedList = await fetchCredentials()
+        if (selectedCredential?.id === credentialId) {
+          const updated = (updatedList as Credential[]).find((cred) => cred.id === credentialId) || null
+          setSelectedCredential(updated)
+        }
+      } catch (error: any) {
+        console.error('Failed to remove member:', error)
+        alert(error.message || 'Failed to remove member')
+      } finally {
+        setRemovingMemberKey((current) => (current === `${credentialId}:${memberId}` ? null : current))
+      }
+    },
+    [fetchCredentials, selectedCredential],
+  )
 
   const handleTogglePrivacy = useCallback(async (credentialId: string, currentPrivacyLevel: 'PRIVATE' | 'PUBLIC') => {
     try {
@@ -331,6 +410,88 @@ export default function CredentialsPage() {
     setFormData(prev => ({ ...prev, [field]: value }))
   }, [])
 
+  const toggleCredentialSelection = useCallback((credentialId: string) => {
+    setSelectedCredentialIds(prev =>
+      prev.includes(credentialId) ? prev.filter(id => id !== credentialId) : [...prev, credentialId],
+    )
+  }, [])
+
+  const toggleMemberSelection = useCallback((memberId: string) => {
+    setSelectedMemberIds(prev =>
+      prev.includes(memberId) ? prev.filter(id => id !== memberId) : [...prev, memberId],
+    )
+  }, [])
+
+  const resetBulkCollabState = useCallback(() => {
+    setSelectedCredentialIds([])
+    setSelectedMemberIds([])
+    setMemberSearch('')
+    setExpandedManageCredentialId(null)
+  }, [])
+
+  const handleBulkCollabSubmit = useCallback(async () => {
+    if (selectedCredentialIds.length === 0 || selectedMemberIds.length === 0) {
+      return
+    }
+    setIsSubmittingBulkCollab(true)
+    try {
+      const response = await apiClient.requestCredentialCollaboration({
+        credentialIds: selectedCredentialIds,
+        memberIds: selectedMemberIds,
+        role: 'viewer',
+      })
+      const summary = (response as { summary?: CollaborationSummary })?.summary
+      setCollabSummary(
+        summary ?? {
+          created: 0,
+          updated: 0,
+          skipped: 0,
+          details: [],
+        },
+      )
+      setIsCollabSummaryDialogOpen(true)
+      setIsBulkCollabDialogOpen(false)
+      resetBulkCollabState()
+      await fetchCredentials()
+    } catch (error: any) {
+      console.error('Failed to send collaboration requests:', error)
+      alert(error.message || 'Failed to send collaboration requests')
+    } finally {
+      setIsSubmittingBulkCollab(false)
+    }
+  }, [selectedCredentialIds, selectedMemberIds, fetchCredentials, resetBulkCollabState])
+
+  const handleOpenBulkCollab = useCallback(() => {
+    if (publicCredentials.length === 0) {
+      alert('No PUBLIC credentials available for collaboration. Please update a credential privacy level to PUBLIC first.')
+      return
+    }
+    setCollabDialogTab('invite')
+    setIsBulkCollabDialogOpen(true)
+  }, [publicCredentials.length])
+
+  const handleBulkDialogChange = useCallback(
+    (open: boolean) => {
+      setIsBulkCollabDialogOpen(open)
+      if (!open) {
+        resetBulkCollabState()
+        setCollabDialogTab('invite')
+      }
+    },
+    [resetBulkCollabState],
+  )
+
+  const toggleManageCredential = useCallback((credentialId: string) => {
+    setExpandedManageCredentialId(prev => (prev === credentialId ? null : credentialId))
+  }, [])
+
+  const handleCollabSummaryDialogChange = useCallback((open: boolean) => {
+    setIsCollabSummaryDialogOpen(open)
+    if (!open) {
+      setCollabSummary(null)
+    }
+  }, [])
+
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -340,16 +501,7 @@ export default function CredentialsPage() {
             <p className="text-muted-foreground">Manage login credentials and collaborate with your team</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => {
-              // Open a dialog to manage collaboration for PUBLIC credentials only
-              const publicCredentials = credentials.filter(c => c.privacyLevel === 'PUBLIC')
-              if (publicCredentials.length > 0) {
-                // For now, just show a message - can be enhanced later
-                alert(`Collaboration feature: You can add members to individual PUBLIC credentials from the table actions. Found ${publicCredentials.length} PUBLIC credential(s) available for collaboration.`)
-              } else {
-                alert('No PUBLIC credentials available for collaboration. Please create credentials with PUBLIC privacy level to enable sharing.')
-              }
-            }}>
+            <Button variant="outline" onClick={handleOpenBulkCollab}>
               <UsersIcon className="h-4 w-4 mr-2" />
               Collab
             </Button>
@@ -629,6 +781,289 @@ export default function CredentialsPage() {
           </Card>
         )}
 
+        {/* Bulk Collaboration Dialog */}
+        <Dialog open={isBulkCollabDialogOpen} onOpenChange={handleBulkDialogChange}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Collaborate on Credentials</DialogTitle>
+              <DialogDescription>
+                Invite new members or review existing collaborations across your PUBLIC credentials.
+              </DialogDescription>
+            </DialogHeader>
+            <Tabs value={collabDialogTab} onValueChange={(value) => setCollabDialogTab(value as 'invite' | 'manage')}>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="invite">Invite Members</TabsTrigger>
+                <TabsTrigger value="manage">Manage Collaborations</TabsTrigger>
+              </TabsList>
+              <TabsContent value="invite" className="mt-4 space-y-4">
+                {publicCredentials.length === 0 ? (
+                  <div className="p-4 text-sm text-muted-foreground border rounded-lg bg-muted/40">
+                    There are no PUBLIC credentials available right now. Update a credential&apos;s privacy level to PUBLIC to collaborate.
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid gap-6 md:grid-cols-2">
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <Label className="text-sm font-medium">Public Credentials</Label>
+                          <span className="text-xs text-muted-foreground">{selectedCredentialIds.length} selected</span>
+                        </div>
+                        <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                          {publicCredentials.map((credential) => {
+                            const isSelected = selectedCredentialIds.includes(credential.id)
+                            return (
+                              <label
+                                key={credential.id}
+                                className={`flex gap-3 rounded-lg border p-3 text-sm cursor-pointer transition-colors ${
+                                  isSelected ? 'border-primary bg-primary/5' : 'hover:border-primary/40'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="mt-1 h-4 w-4 rounded border-muted-foreground"
+                                  checked={isSelected}
+                                  onChange={() => toggleCredentialSelection(credential.id)}
+                                />
+                                <div className="flex-1">
+                                  <p className="font-medium">{credential.company}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {credential.platform} • {credential.geography}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    {credential.members.length} member{credential.members.length === 1 ? '' : 's'} currently
+                                  </p>
+                                </div>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <Label className="text-sm font-medium">Members</Label>
+                          <span className="text-xs text-muted-foreground">{selectedMemberIds.length} selected</span>
+                        </div>
+                        <Input
+                          placeholder="Search team..."
+                          value={memberSearch}
+                          onChange={(e) => setMemberSearch(e.target.value)}
+                          className="mb-3"
+                        />
+                        <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                          {filteredMembers.length === 0 ? (
+                            <div className="text-sm text-muted-foreground p-3 border rounded-lg">No members found.</div>
+                          ) : (
+                            filteredMembers.map((member) => {
+                              const isSelected = selectedMemberIds.includes(member.id)
+                              return (
+                                <label
+                                  key={member.id}
+                                  className={`flex gap-3 rounded-lg border p-3 text-sm cursor-pointer transition-colors ${
+                                    isSelected ? 'border-primary bg-primary/5' : 'hover-border-primary/40'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="mt-1 h-4 w-4 rounded border-muted-foreground"
+                                    checked={isSelected}
+                                    onChange={() => toggleMemberSelection(member.id)}
+                                  />
+                                  <div>
+                                    <p className="font-medium">{member.name || member.email}</p>
+                                    <p className="text-xs text-muted-foreground">{member.email}</p>
+                                  </div>
+                                </label>
+                              )
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2 pt-2">
+                      <p className="text-xs text-muted-foreground">
+                        Selected credentials: {selectedCredentialIds.length} · Selected members: {selectedMemberIds.length}
+                      </p>
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" onClick={() => handleBulkDialogChange(false)}>
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={handleBulkCollabSubmit}
+                          disabled={
+                            selectedCredentialIds.length === 0 || selectedMemberIds.length === 0 || isSubmittingBulkCollab
+                          }
+                        >
+                          {isSubmittingBulkCollab ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Sending...
+                            </>
+                          ) : (
+                            'Send Collaboration'
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </TabsContent>
+              <TabsContent value="manage" className="mt-4 space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-xl border p-4">
+                    <p className="text-xs text-muted-foreground">Public Credentials</p>
+                    <p className="text-2xl font-semibold">{publicCredentials.length}</p>
+                  </div>
+                  <div className="rounded-xl border p-4">
+                    <p className="text-xs text-muted-foreground">Total Collaborators</p>
+                    <p className="text-2xl font-semibold">{totalCollaborationMembers}</p>
+                  </div>
+                </div>
+                {publicCredentials.length === 0 ? (
+                  <div className="p-4 text-sm text-muted-foreground border rounded-lg bg-muted/40">
+                    No PUBLIC credentials available to manage.
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                    {publicCredentials.map((credential) => {
+                      const memberCount = credential.members.length
+                      const isExpanded = expandedManageCredentialId === credential.id
+                      return (
+                        <div key={credential.id} className="rounded-lg border p-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold">{credential.company}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {credential.platform} • {credential.geography}
+                              </p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="flex items-center gap-2"
+                              onClick={() => toggleManageCredential(credential.id)}
+                            >
+                              <UsersIcon className="h-4 w-4" />
+                              <span>{memberCount} collaborator{memberCount === 1 ? '' : 's'}</span>
+                            </Button>
+                          </div>
+                          {isExpanded && (
+                            <div className="mt-3 space-y-2">
+                              {memberCount === 0 ? (
+                                <p className="text-sm text-muted-foreground">No collaborators yet.</p>
+                              ) : (
+                                credential.members.map((member) => {
+                                  const memberKey = `${credential.id}:${member.id}`
+                                  const isRemoving = removingMemberKey === memberKey
+                                  return (
+                                    <div
+                                      key={member.id}
+                                      className="flex items-center justify-between rounded border p-2 text-sm"
+                                    >
+                                      <div>
+                                        <p className="font-medium">{member.user.name || member.user.email}</p>
+                                        <p className="text-xs text-muted-foreground capitalize">{member.role}</p>
+                                      </div>
+                                      <Button
+                                        variant="destructive"
+                                        size="sm"
+                                        className="flex items-center gap-1"
+                                        onClick={() => handleRemoveMember(credential.id, member.id)}
+                                        disabled={isRemoving}
+                                      >
+                                        {isRemoving ? (
+                                          <>
+                                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                            Removing...
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Trash2 className="h-3 w-3" />
+                                            Remove
+                                          </>
+                                        )}
+                                      </Button>
+                                    </div>
+                                  )
+                                })
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <Button variant="outline" onClick={() => handleBulkDialogChange(false)}>
+                    Close
+                  </Button>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </DialogContent>
+        </Dialog>
+
+        {/* Collaboration Summary Dialog */}
+        <Dialog open={isCollabSummaryDialogOpen} onOpenChange={handleCollabSummaryDialogChange}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Collaboration Summary</DialogTitle>
+              <DialogDescription>Here&apos;s what happened with your collaboration request.</DialogDescription>
+            </DialogHeader>
+            {collabSummary ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                  <div className="rounded-lg border p-2">
+                    <p className="text-xs text-muted-foreground">Created</p>
+                    <p className="text-lg font-semibold">{collabSummary.created}</p>
+                  </div>
+                  <div className="rounded-lg border p-2">
+                    <p className="text-xs text-muted-foreground">Updated</p>
+                    <p className="text-lg font-semibold">{collabSummary.updated}</p>
+                  </div>
+                  <div className="rounded-lg border p-2">
+                    <p className="text-xs text-muted-foreground">Skipped</p>
+                    <p className="text-lg font-semibold">{collabSummary.skipped}</p>
+                  </div>
+                </div>
+                {collabSummary.inaccessibleCredentialCount ? (
+                  <div className="text-xs text-yellow-800 bg-yellow-50 border border-yellow-200 rounded-lg p-2">
+                    {collabSummary.inaccessibleCredentialCount} credential
+                    {collabSummary.inaccessibleCredentialCount > 1 ? 's were' : ' was'} not available for collaboration
+                    due to permissions or privacy level.
+                  </div>
+                ) : null}
+                <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
+                  {collabSummary.details.length === 0 ? (
+                    <div className="text-sm text-muted-foreground text-center py-6">
+                      No collaboration changes were made.
+                    </div>
+                  ) : (
+                    collabSummary.details.map((detail) => (
+                      <div key={detail.memberId} className="rounded-lg border p-3">
+                        <p className="font-medium">{detail.memberName || detail.memberEmail || 'Member'}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {detail.action === 'created' && `Sent ${detail.credentialCount} credential request(s).`}
+                          {detail.action === 'updated' && `Updated request with ${detail.credentialCount} additional credential(s).`}
+                          {detail.action === 'skipped' && 'Request skipped.'}
+                        </p>
+                        {detail.note && <p className="text-xs text-yellow-700 mt-1">{detail.note}</p>}
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="flex justify-end pt-2">
+                  <Button onClick={() => handleCollabSummaryDialogChange(false)}>Close</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                No summary available. Please try sending the collaboration request again.
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
         {/* Add/Edit Credential Dialog */}
         <Dialog open={isDialogOpen} onOpenChange={(open) => {
           if (!open) closeDialog()
@@ -798,7 +1233,7 @@ export default function CredentialsPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => handleRemoveMember(member.id)}
+                            onClick={() => handleRemoveMember(selectedCredential.id, member.id)}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
