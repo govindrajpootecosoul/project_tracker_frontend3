@@ -30,7 +30,11 @@ interface Project {
   department?: string
   status: string
   createdAt: string
-  members: { user: { id: string; name?: string; email: string } }[]
+  members: {
+    id?: string
+    role?: string
+    user: { id: string; name?: string; email: string }
+  }[]
   tasks?: { id: string; title: string; dueDate?: string; status: string }[]
   _count?: { tasks: number }
 }
