@@ -60,6 +60,8 @@ interface Task {
   dueDate?: string
   assignees: { user: { name?: string; email: string } }[]
   project?: { name: string } | null
+  imageCount?: number
+  videoCount?: number
 }
 
 interface AIResponse {
@@ -87,7 +89,7 @@ interface AIResponse {
 interface Notification {
   id: string
   userId: string
-  type: 'REQUEST' | 'COMMENT' | 'INVITE' | 'TASK_ASSIGNED' | 'PROJECT_INVITE'
+  type: 'REQUEST' | 'COMMENT' | 'INVITE' | 'TASK_ASSIGNED' | 'PROJECT_INVITE' | 'SUBSCRIPTION_INVITE'
   title: string
   message: string
   link?: string | null
@@ -125,6 +127,13 @@ export function Navbar() {
   const [acceptedTaskIds, setAcceptedTaskIds] = useState<Set<string>>(new Set())
   const [respondingCollabRequestIds, setRespondingCollabRequestIds] = useState<Set<string>>(new Set())
   const [pendingCollabRequestIds, setPendingCollabRequestIds] = useState<Set<string>>(new Set())
+  const [respondingProjectCollabRequestIds, setRespondingProjectCollabRequestIds] = useState<Set<string>>(new Set())
+  const [pendingProjectCollabRequestIds, setPendingProjectCollabRequestIds] = useState<Set<string>>(new Set())
+  const [cancelledProjectCollabRequestIds, setCancelledProjectCollabRequestIds] = useState<Set<string>>(new Set())
+  const [respondingSubscriptionCollabRequestIds, setRespondingSubscriptionCollabRequestIds] = useState<Set<string>>(new Set())
+  const [pendingSubscriptionCollabRequestIds, setPendingSubscriptionCollabRequestIds] = useState<Set<string>>(new Set())
+  const [cancelledSubscriptionCollabRequestIds, setCancelledSubscriptionCollabRequestIds] = useState<Set<string>>(new Set())
+  const [acceptedSubscriptionCollabRequestIds, setAcceptedSubscriptionCollabRequestIds] = useState<Set<string>>(new Set())
   const [isAIDialogOpen, setIsAIDialogOpen] = useState(false)
   const [aiQuery, setAiQuery] = useState('')
   const [aiResponse, setAiResponse] = useState<AIResponse | null>(null)
@@ -206,9 +215,13 @@ export function Navbar() {
   // Fetch functions need to be defined before useEffect - wrapped in useCallback to prevent infinite loops
   const fetchNotifications = useCallback(async () => {
     try {
-      const [notificationsResponse, collabRequests] = await Promise.all([
+      const [notificationsResponse, collabRequests, projectCollabRequests, sentProjectCollabRequests, subscriptionCollabRequests, sentSubscriptionCollabRequests] = await Promise.all([
         apiClient.getNotifications(),
         apiClient.getCredentialCollaborationRequests().catch(() => []),
+        apiClient.getProjectCollaborationRequests().catch(() => []),
+        apiClient.getSentProjectCollaborationRequests().catch(() => []),
+        apiClient.getSubscriptionCollaborationRequests().catch(() => []),
+        apiClient.getSentSubscriptionCollaborationRequests().catch(() => []),
       ])
       const notificationsData = notificationsResponse as Notification[]
       setNotifications(notificationsData)
@@ -217,6 +230,50 @@ export function Navbar() {
       } else {
         setPendingCollabRequestIds(new Set())
       }
+      // Combine both received and sent requests to track all statuses
+      const allProjectRequests = [
+        ...(Array.isArray(projectCollabRequests) ? projectCollabRequests : []),
+        ...(Array.isArray(sentProjectCollabRequests) ? sentProjectCollabRequests : []),
+      ]
+      
+      const projectPendingIds = new Set<string>()
+      const projectCancelledIds = new Set<string>()
+      
+      allProjectRequests.forEach((request: any) => {
+        if (request.status === 'PENDING') {
+          projectPendingIds.add(request.id)
+        } else if (request.status === 'CANCELLED' || request.status === 'DECLINED') {
+          projectCancelledIds.add(request.id)
+        }
+      })
+      
+      setPendingProjectCollabRequestIds(projectPendingIds)
+      setCancelledProjectCollabRequestIds(projectCancelledIds)
+
+      // Handle subscription collaboration requests
+      const allSubscriptionRequests = [
+        ...(Array.isArray(subscriptionCollabRequests) ? subscriptionCollabRequests : []),
+        ...(Array.isArray(sentSubscriptionCollabRequests) ? sentSubscriptionCollabRequests : []),
+      ]
+      
+      const subscriptionPendingIds = new Set<string>()
+      const subscriptionCancelledIds = new Set<string>()
+      const subscriptionAcceptedIds = new Set<string>()
+      
+      allSubscriptionRequests.forEach((request: any) => {
+        const status = String(request.status || '').toUpperCase()
+        if (status === 'PENDING') {
+          subscriptionPendingIds.add(request.id)
+        } else if (status === 'CANCELLED' || status === 'DECLINED') {
+          subscriptionCancelledIds.add(request.id)
+        } else if (status === 'ACCEPTED') {
+          subscriptionAcceptedIds.add(request.id)
+        }
+      })
+      
+      setPendingSubscriptionCollabRequestIds(subscriptionPendingIds)
+      setCancelledSubscriptionCollabRequestIds(subscriptionCancelledIds)
+      setAcceptedSubscriptionCollabRequestIds(subscriptionAcceptedIds)
       
       // After fetching notifications, check which review requests have already been accepted
       const reviewNotifications = notificationsData.filter(
@@ -493,6 +550,30 @@ export function Navbar() {
     }
   }, [])
 
+  const getProjectCollabRequestIdFromNotification = useCallback((notification: Notification) => {
+    if (!notification.link) return null
+    try {
+      const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+      const url = new URL(notification.link, base)
+      return url.searchParams.get('projectCollabRequest')
+    } catch {
+      const match = notification.link.match(/projectCollabRequest=([^&]+)/)
+      return match ? match[1] : null
+    }
+  }, [])
+
+  const getSubscriptionCollabRequestIdFromNotification = useCallback((notification: Notification) => {
+    if (!notification.link) return null
+    try {
+      const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+      const url = new URL(notification.link, base)
+      return url.searchParams.get('subscriptionCollabRequest')
+    } catch {
+      const match = notification.link.match(/subscriptionCollabRequest=([^&]+)/)
+      return match ? match[1] : null
+    }
+  }, [])
+
   const handleAcceptReviewRequest = async (e: React.MouseEvent, notification: Notification) => {
     e.stopPropagation()
     if (!notification.link) return
@@ -614,6 +695,112 @@ export function Navbar() {
       alert(error.message || 'Failed to respond to collaboration request')
     } finally {
       setRespondingCollabRequestIds(prev => {
+        const updated = new Set(prev)
+        updated.delete(requestId)
+        return updated
+      })
+    }
+  }
+
+  const handleProjectCollabRequestResponse = async (e: React.MouseEvent, notification: Notification, accept: boolean) => {
+    e.stopPropagation()
+    const requestId = getProjectCollabRequestIdFromNotification(notification)
+    if (!requestId) {
+      alert('Unable to process this project collaboration request. Please open the projects page to respond.')
+      return
+    }
+
+    if (respondingProjectCollabRequestIds.has(requestId)) {
+      return
+    }
+
+    try {
+      setRespondingProjectCollabRequestIds(prev => new Set(prev).add(requestId))
+      await apiClient.respondProjectCollaborationRequest(requestId, accept)
+      setPendingProjectCollabRequestIds(prev => {
+        const updated = new Set(prev)
+        updated.delete(requestId)
+        return updated
+      })
+      if (!accept) {
+        setCancelledProjectCollabRequestIds(prev => new Set(prev).add(requestId))
+      }
+      if (!notification.read) {
+        handleMarkAsRead(notification.id)
+      }
+      await fetchNotifications()
+      await fetchUnreadCount()
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('refreshProjects'))
+      }
+      if (accept) {
+        router.push('/projects')
+      }
+      setIsNotificationOpen(false)
+    } catch (error: any) {
+      console.error('Failed to respond to project collaboration request:', error)
+      alert(error.message || 'Failed to respond to project collaboration request')
+    } finally {
+      setRespondingProjectCollabRequestIds(prev => {
+        const updated = new Set(prev)
+        updated.delete(requestId)
+        return updated
+      })
+    }
+  }
+
+  const handleSubscriptionCollabRequestResponse = async (e: React.MouseEvent, notification: Notification, accept: boolean) => {
+    e.stopPropagation()
+    const requestId = getSubscriptionCollabRequestIdFromNotification(notification)
+    if (!requestId) {
+      alert('Unable to process this subscription collaboration request. Please open the subscriptions page to respond.')
+      return
+    }
+
+    if (respondingSubscriptionCollabRequestIds.has(requestId)) {
+      return
+    }
+
+    try {
+      setRespondingSubscriptionCollabRequestIds(prev => new Set(prev).add(requestId))
+      await apiClient.respondSubscriptionCollaborationRequest(requestId, accept)
+      setPendingSubscriptionCollabRequestIds(prev => {
+        const updated = new Set(prev)
+        updated.delete(requestId)
+        return updated
+      })
+      if (accept) {
+        setAcceptedSubscriptionCollabRequestIds(prev => new Set(prev).add(requestId))
+        setCancelledSubscriptionCollabRequestIds(prev => {
+          const updated = new Set(prev)
+          updated.delete(requestId)
+          return updated
+        })
+      } else {
+        setCancelledSubscriptionCollabRequestIds(prev => new Set(prev).add(requestId))
+        setAcceptedSubscriptionCollabRequestIds(prev => {
+          const updated = new Set(prev)
+          updated.delete(requestId)
+          return updated
+        })
+      }
+      if (!notification.read) {
+        handleMarkAsRead(notification.id)
+      }
+      await fetchNotifications()
+      await fetchUnreadCount()
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('refreshSubscriptions'))
+      }
+      if (accept) {
+        router.push('/subscriptions')
+      }
+      setIsNotificationOpen(false)
+    } catch (error: any) {
+      console.error('Failed to respond to subscription collaboration request:', error)
+      alert(error.message || 'Failed to respond to subscription collaboration request')
+    } finally {
+      setRespondingSubscriptionCollabRequestIds(prev => {
         const updated = new Set(prev)
         updated.delete(requestId)
         return updated
@@ -974,10 +1161,18 @@ export function Navbar() {
                       notifications.map((notification) => (
                         <div
                           key={notification.id}
-                          className={`p-4 border-b ${notification.type === 'REQUEST' && notification.title === 'Task Review Requested' ? '' : 'cursor-pointer hover:bg-accent transition-colors'} ${
+                          className={`p-4 border-b ${(notification.type === 'REQUEST' && notification.title === 'Task Review Requested') || (notification.type === 'PROJECT_INVITE' && notification.link?.includes('projectCollabRequest=')) || (notification.type === 'INVITE' && notification.link?.includes('subscriptionCollabRequest=')) || notification.link?.includes('collabRequest=') ? '' : 'cursor-pointer hover:bg-accent transition-colors'} ${
                             !notification.read ? 'bg-accent/50' : ''
                           }`}
-                          onClick={() => notification.type !== 'REQUEST' || notification.title !== 'Task Review Requested' ? handleNotificationClick(notification) : undefined}
+                          onClick={() => {
+                            const isTaskReview = notification.type === 'REQUEST' && notification.title === 'Task Review Requested'
+                            const isProjectCollab = notification.type === 'PROJECT_INVITE' && notification.link?.includes('projectCollabRequest=')
+                            const isSubscriptionCollab = notification.type === 'INVITE' && notification.link?.includes('subscriptionCollabRequest=')
+                            const isCredCollab = notification.link?.includes('collabRequest=')
+                            if (!isTaskReview && !isProjectCollab && !isSubscriptionCollab && !isCredCollab) {
+                              handleNotificationClick(notification)
+                            }
+                          }}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex-1">
@@ -1078,6 +1273,105 @@ export function Navbar() {
                                       disabled={isProcessing}
                                     >
                                       {isProcessing ? 'Please wait...' : 'Decline'}
+                                    </Button>
+                                  </div>
+                                )
+                              })()}
+                              {(notification.type === 'PROJECT_INVITE' && notification.link?.includes('projectCollabRequest=')) && (() => {
+                                const requestId = getProjectCollabRequestIdFromNotification(notification)
+                                if (!requestId) return null
+                                const isProcessing = respondingProjectCollabRequestIds.has(requestId)
+                                const isPending = pendingProjectCollabRequestIds.has(requestId)
+                                const isCancelled = cancelledProjectCollabRequestIds.has(requestId)
+                                if (!isPending && !isCancelled) {
+                                  return (
+                                    <div className="mt-3 px-3 py-1.5 text-sm text-center bg-green-50 text-green-700 rounded-md border border-green-200">
+                                      Accepted
+                                    </div>
+                                  )
+                                }
+                                if (isCancelled) {
+                                  return (
+                                    <div className="mt-3 px-3 py-1.5 text-sm text-center bg-red-50 text-red-700 rounded-md border border-red-200">
+                                      Rejected
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <div className="flex gap-2 mt-3">
+                                    <Button
+                                      size="sm"
+                                      onClick={(e) => handleProjectCollabRequestResponse(e, notification, true)}
+                                      className="flex-1"
+                                      disabled={isProcessing}
+                                    >
+                                      {isProcessing ? (
+                                        <>
+                                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                          Processing...
+                                        </>
+                                      ) : (
+                                        'Accept'
+                                      )}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => handleProjectCollabRequestResponse(e, notification, false)}
+                                      className="flex-1"
+                                      disabled={isProcessing}
+                                    >
+                                      {isProcessing ? 'Please wait...' : 'Cancel'}
+                                    </Button>
+                                  </div>
+                                )
+                              })()}
+                              {(notification.type === 'INVITE' && notification.link?.includes('subscriptionCollabRequest=')) && (() => {
+                                const requestId = getSubscriptionCollabRequestIdFromNotification(notification)
+                                if (!requestId) return null
+                                const isProcessing = respondingSubscriptionCollabRequestIds.has(requestId)
+                                const isPending = pendingSubscriptionCollabRequestIds.has(requestId)
+                                const isCancelled = cancelledSubscriptionCollabRequestIds.has(requestId)
+                                const isAccepted = acceptedSubscriptionCollabRequestIds.has(requestId)
+                                if (!isPending && !isCancelled) {
+                                  return (
+                                    <div className="mt-3 px-3 py-1.5 text-sm text-center bg-green-50 text-green-700 rounded-md border border-green-200">
+                                      Accepted
+                                    </div>
+                                  )
+                                }
+                                if (isCancelled) {
+                                  return (
+                                    <div className="mt-3 px-3 py-1.5 text-sm text-center bg-red-50 text-red-700 rounded-md border border-red-200">
+                                      Rejected
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <div className="flex gap-2 mt-3">
+                                    <Button
+                                      size="sm"
+                                      onClick={(e) => handleSubscriptionCollabRequestResponse(e, notification, true)}
+                                      className="flex-1"
+                                      disabled={isProcessing}
+                                    >
+                                      {isProcessing ? (
+                                        <>
+                                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                          Processing...
+                                        </>
+                                      ) : (
+                                        'Accept'
+                                      )}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => handleSubscriptionCollabRequestResponse(e, notification, false)}
+                                      className="flex-1"
+                                      disabled={isProcessing}
+                                    >
+                                      {isProcessing ? 'Please wait...' : 'Cancel'}
                                     </Button>
                                   </div>
                                 )

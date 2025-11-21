@@ -969,12 +969,15 @@ export default function TeamPage() {
                                         try {
                                           await apiClient.updateMemberFeatures(member.id, undefined, checked)
                                           await fetchTeamMembers({ force: true })
+                                          // If updating own access, refresh user role to update access check
+                                          if (member.id === currentUserId) {
+                                            window.dispatchEvent(new CustomEvent('userPermissionsUpdated'))
+                                          }
                                         } catch (error: any) {
                                           console.error('Failed to update subscription access:', error)
                                           alert(error.message || 'Failed to update subscription access')
                                         }
                                       }}
-                                      disabled={member.id === currentUserId}
                                     />
                                     <span className="text-sm text-muted-foreground">
                                       {member.hasSubscriptionAccess ? 'Yes' : 'No'}

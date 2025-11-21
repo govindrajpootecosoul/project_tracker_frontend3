@@ -82,6 +82,8 @@ export default function ProjectsPage() {
   const [collabProjectDepartmentFilter, setCollabProjectDepartmentFilter] = useState<string>('all')
   const [manualEmail, setManualEmail] = useState<string>('')
   const [manualEmails, setManualEmails] = useState<string[]>([])
+  const [pendingProjectInvites, setPendingProjectInvites] = useState<Record<string, string[]>>({})
+  const [isSendingInvite, setIsSendingInvite] = useState(false)
   const [openProjectActionId, setOpenProjectActionId] = useState<string | null>(null)
   const [brandInputMode, setBrandInputMode] = useState<'select' | 'custom'>('select')
   const [companyInputMode, setCompanyInputMode] = useState<'select' | 'custom'>('select')
@@ -156,6 +158,37 @@ export default function ProjectsPage() {
     }
   }, [])
 
+  const fetchPendingProjectInvites = useCallback(async () => {
+    try {
+      // Fetch sent collaboration requests (requests sent by current user)
+      const sentRequests = await apiClient.getSentProjectCollaborationRequests() as any[]
+      
+      // Map requests to projectId -> email[] format
+      const invitesMap: Record<string, string[]> = {}
+      
+      sentRequests.forEach((request) => {
+        if (request.status === 'PENDING') {
+          const email = request.inviteeEmail || request.invitee?.email
+          if (email) {
+            request.projectIds.forEach((projectId: string) => {
+              if (!invitesMap[projectId]) {
+                invitesMap[projectId] = []
+              }
+              const normalizedEmail = email.toLowerCase()
+              if (!invitesMap[projectId].some(e => e.toLowerCase() === normalizedEmail)) {
+                invitesMap[projectId].push(email)
+              }
+            })
+          }
+        }
+      })
+      
+      setPendingProjectInvites(invitesMap)
+    } catch (error) {
+      console.error('Failed to fetch pending project invites:', error)
+    }
+  }, [])
+
   useEffect(() => {
     const token = getToken()
     if (!token) {
@@ -167,20 +200,70 @@ export default function ProjectsPage() {
     fetchDepartments()
     fetchTeamMembers()
     fetchUserRole()
-  }, [router, fetchProjects, fetchDepartments, fetchTeamMembers, fetchUserRole])
+    fetchPendingProjectInvites()
+  }, [router, fetchProjects, fetchDepartments, fetchTeamMembers, fetchUserRole, fetchPendingProjectInvites])
+
+  useEffect(() => {
+    const token = getToken()
+    if (!token) return
+    
+    // Refresh pending invites when page regains focus (in case requests were accepted/declined in another tab)
+    const handleFocus = () => {
+      fetchPendingProjectInvites()
+    }
+    window.addEventListener('focus', handleFocus)
+    
+    // Also listen for custom refresh event
+    const handleRefresh = () => {
+      fetchPendingProjectInvites()
+    }
+    window.addEventListener('refreshProjects', handleRefresh)
+    
+    return () => {
+      window.removeEventListener('focus', handleFocus)
+      window.removeEventListener('refreshProjects', handleRefresh)
+    }
+  }, [fetchPendingProjectInvites])
+
 
   const handleInviteMember = async (projectId: string, email: string) => {
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+      alert('Please enter a valid email address.')
+      return
+    }
+
+    setIsSendingInvite(true)
     try {
-      // TODO: Implement invite API endpoint
-      // For now, just show success message
-      alert(`Invitation sent to ${email}`)
+      const existingMember = allMembers.find(
+        (member) => member.email.toLowerCase() === normalizedEmail,
+      )
+
+      const response = await apiClient.requestProjectCollaboration({
+        projectIds: [projectId],
+        memberIds: existingMember ? [existingMember.id] : [],
+        manualEmails: existingMember ? undefined : [normalizedEmail],
+        role: 'member',
+      })
+
+      const summary = (response as { summary?: any })?.summary
+
+      // Refresh pending invites after invite (whether existing member or new)
+      await fetchPendingProjectInvites()
+
+      alert(
+        summary?.message ||
+          `Invitation sent to ${email}. They'll receive a notification with project access.`,
+      )
       setIsInviteDialogOpen(false)
       setInviteEmail('')
       setSelectedProject(null)
       await fetchProjects(false)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to invite member:', error)
-      alert('Failed to invite member')
+      alert(error?.message || 'Failed to invite member')
+    } finally {
+      setIsSendingInvite(false)
     }
   }
 
@@ -304,6 +387,44 @@ export default function ProjectsPage() {
     setManualEmails(prev => prev.filter(e => e !== email))
   }, [])
 
+  const addPendingInvites = useCallback((projectIds: string[], emails: string[]) => {
+    if (projectIds.length === 0 || emails.length === 0) return
+    setPendingProjectInvites((prev) => {
+      let changed = false
+      const updated = { ...prev }
+      projectIds.forEach((projectId) => {
+        const existing = updated[projectId] || []
+        const newList = [...existing]
+        emails.forEach((email) => {
+          if (!newList.some((entry) => entry.toLowerCase() === email.toLowerCase())) {
+            newList.push(email)
+            changed = true
+          }
+        })
+        if (newList.length > 0) {
+          updated[projectId] = newList
+        }
+      })
+      return changed ? updated : prev
+    })
+  }, [])
+
+  const removePendingInvite = useCallback((projectId: string, email: string) => {
+    setPendingProjectInvites((prev) => {
+      const current = prev[projectId]
+      if (!current || current.length === 0) return prev
+      const filtered = current.filter((entry) => entry.toLowerCase() !== email.toLowerCase())
+      if (filtered.length === current.length) return prev
+      const updated = { ...prev }
+      if (filtered.length === 0) {
+        delete updated[projectId]
+      } else {
+        updated[projectId] = filtered
+      }
+      return updated
+    })
+  }, [])
+
   const handleCollabSubmit = useCallback(async () => {
     if (selectedProjectIds.length === 0) {
       alert('Please select at least one project.')
@@ -316,15 +437,16 @@ export default function ProjectsPage() {
 
     setIsSubmittingCollab(true)
     try {
-      const isAdminUser = userRole.toUpperCase() === 'ADMIN' || userRole.toUpperCase() === 'SUPER_ADMIN'
       const response = await apiClient.requestProjectCollaboration({
         projectIds: selectedProjectIds,
         memberIds: selectedMemberIds,
-        manualEmails: isAdminUser ? manualEmails : [],
+        manualEmails,
         role: 'member',
       })
       const summary = (response as { summary?: any })?.summary
       setCollabSummary(summary || null)
+      // Refresh pending invites after successful collaboration request
+      await fetchPendingProjectInvites()
       setIsCollabSummaryDialogOpen(true)
       setIsCollabDialogOpen(false)
       resetCollabState()
@@ -338,7 +460,7 @@ export default function ProjectsPage() {
     } finally {
       setIsSubmittingCollab(false)
     }
-  }, [selectedProjectIds, selectedMemberIds, manualEmails, userRole, fetchProjects, resetCollabState])
+  }, [selectedProjectIds, selectedMemberIds, manualEmails, fetchPendingProjectInvites, fetchProjects, resetCollabState])
 
   const handleCollabDialogChange = useCallback(
     (open: boolean) => {
@@ -370,12 +492,17 @@ export default function ProjectsPage() {
     }
   }, [fetchProjects])
 
+  const isSuperAdmin = userRole.toUpperCase() === 'SUPER_ADMIN'
+
   const matchesDepartmentFilter = useCallback((project: Project) => {
-    if (departmentFilter === 'all') return true
+    if (departmentFilter === 'all') {
+      // Only Super Admins can see all departments
+      return isSuperAdmin
+    }
     const projectDepartment = project.department?.trim().toLowerCase()
     const filterDepartment = departmentFilter.trim().toLowerCase()
     return projectDepartment === filterDepartment
-  }, [departmentFilter])
+  }, [departmentFilter, isSuperAdmin])
 
   const matchesSearchQuery = useCallback((project: Project) => {
     if (!searchQuery.trim()) return true
@@ -395,8 +522,43 @@ export default function ProjectsPage() {
     )
   }, [projects, matchesSearchQuery, matchesDepartmentFilter])
 
-  const isSuperAdmin = userRole.toUpperCase() === 'SUPER_ADMIN'
-  const isAdmin = userRole.toUpperCase() === 'ADMIN' || isSuperAdmin
+  // Set default department filter for non-Super Admins
+  useEffect(() => {
+    // If user is not Super Admin and filter is set to 'all', set it to their department
+    if (!isSuperAdmin && departmentFilter === 'all' && userDepartment) {
+      setDepartmentFilter(userDepartment)
+    }
+  }, [isSuperAdmin, userDepartment, departmentFilter])
+
+  // Reset collaboration project department filter for non-Super Admins
+  useEffect(() => {
+    // If user is not Super Admin and collaboration project filter is set to 'all', reset it to their department
+    if (!isSuperAdmin && collabProjectDepartmentFilter === 'all' && userDepartment) {
+      setCollabProjectDepartmentFilter(userDepartment)
+    }
+  }, [isSuperAdmin, collabProjectDepartmentFilter, userDepartment])
+
+  useEffect(() => {
+    if (projects.length === 0) return
+    setPendingProjectInvites((prev) => {
+      let changed = false
+      const updated = { ...prev }
+      projects.forEach((project) => {
+        const pending = updated[project.id]
+        if (!pending || pending.length === 0) return
+        const memberEmails = new Set(project.members.map((member) => member.user.email.toLowerCase()))
+        const filtered = pending.filter((email) => !memberEmails.has(email.toLowerCase()))
+        if (filtered.length === 0) {
+          delete updated[project.id]
+          changed = true
+        } else if (filtered.length !== pending.length) {
+          updated[project.id] = filtered
+          changed = true
+        }
+      })
+      return changed ? updated : prev
+    })
+  }, [projects])
 
   // Fetch team members when dialog opens or department filter changes (for superadmin)
   useEffect(() => {
@@ -427,14 +589,15 @@ export default function ProjectsPage() {
   // Filter projects for collaboration dialog by department
   const filteredProjectsForCollab = useMemo(() => {
     if (collabProjectDepartmentFilter === 'all') {
-      return filteredProjects
+      // Only Super Admins can filter by all departments
+      return isSuperAdmin ? filteredProjects : []
     }
     const normalizedFilter = collabProjectDepartmentFilter.trim().toLowerCase()
     return filteredProjects.filter(project => {
       const projectDept = project.department?.trim().toLowerCase() || ''
       return projectDept === normalizedFilter
     })
-  }, [filteredProjects, collabProjectDepartmentFilter])
+  }, [filteredProjects, collabProjectDepartmentFilter, isSuperAdmin])
 
   const handleOpenCollab = useCallback(() => {
     if (filteredProjects.length === 0) {
@@ -524,12 +687,14 @@ export default function ProjectsPage() {
     onDelete, 
     onInvite,
     onViewTasks,
+    pendingInvites = [],
   }: { 
     project: Project
     onEdit: (project: Project) => void
     onDelete: (projectId: string) => void
     onInvite: (project: Project) => void
     onViewTasks: (project: Project) => void
+    pendingInvites?: string[]
   }) => (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -607,6 +772,11 @@ export default function ProjectsPage() {
                       <span className="text-xs text-muted-foreground">+{project.members.length - 3}</span>
                     )}
                     <span className="text-muted-foreground">{project.members.length} members</span>
+                    {pendingInvites.length > 0 && (
+                      <Badge variant="outline" className="text-xs border-amber-300 text-amber-700 bg-amber-50">
+                        {pendingInvites.length} pending invite{pendingInvites.length === 1 ? '' : 's'}
+                      </Badge>
+                    )}
                   </div>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -896,20 +1066,24 @@ export default function ProjectsPage() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-64"
             />
-            <Label htmlFor="department-filter-projects" className="text-sm">Department:</Label>
-            <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
-              <SelectTrigger id="department-filter-projects" className="w-48">
-                <SelectValue placeholder="All Departments" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Departments</SelectItem>
-                {departments.map((dept) => (
-                  <SelectItem key={dept} value={dept}>
-                    {dept}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {isSuperAdmin && (
+              <>
+                <Label htmlFor="department-filter-projects" className="text-sm">Department:</Label>
+                <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+                  <SelectTrigger id="department-filter-projects" className="w-48">
+                    <SelectValue placeholder="All Departments" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Departments</SelectItem>
+                    {departments.map((dept) => (
+                      <SelectItem key={dept} value={dept}>
+                        {dept}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
           </div>
           <div className="flex items-center gap-1 border rounded-lg p-1">
             <Button
@@ -1078,6 +1252,7 @@ export default function ProjectsPage() {
                                   onDelete={handleDeleteProject}
                                   onInvite={openInviteDialog}
                                   onViewTasks={handleOpenProjectTasks}
+                                  pendingInvites={pendingProjectInvites[project.id] || []}
                                 />
                               </div>
                             ))}
@@ -1098,6 +1273,7 @@ export default function ProjectsPage() {
                         onDelete={handleDeleteProject}
                         onInvite={openInviteDialog}
                         onViewTasks={handleOpenProjectTasks}
+                        pendingInvites={pendingProjectInvites[project.id] || []}
                       />
                     ))}
                   </div>
@@ -1139,9 +1315,19 @@ export default function ProjectsPage() {
                       handleInviteMember(selectedProject.id, inviteEmail)
                     }
                   }}
+                  disabled={isSendingInvite}
                 >
-                  <Mail className="h-4 w-4 mr-2" />
-                  Send Invitation
+                  {isSendingInvite ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="h-4 w-4 mr-2" />
+                      Send Invitation
+                    </>
+                  )}
                 </Button>
               </div>
             </div>
@@ -1184,7 +1370,7 @@ export default function ProjectsPage() {
                               <SelectValue placeholder="All Departments" />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="all">All Departments</SelectItem>
+                              {isSuperAdmin && <SelectItem value="all">All Departments</SelectItem>}
                               {departments.map((dept) => (
                                 <SelectItem key={dept} value={dept}>
                                   {dept}
@@ -1281,48 +1467,46 @@ export default function ProjectsPage() {
                             })
                           )}
                         </div>
-                        {isAdmin && (
-                          <div className="mt-4 pt-4 border-t">
-                            <Label className="text-sm font-medium mb-2 block">Add Email Manually (Other Department)</Label>
-                            <div className="flex gap-2 mb-2">
-                              <Input
-                                placeholder="Enter email address..."
-                                value={manualEmail}
-                                onChange={(e) => setManualEmail(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault()
-                                    handleAddManualEmail()
-                                  }
-                                }}
-                                className="flex-1"
-                              />
-                              <Button onClick={handleAddManualEmail} variant="outline" size="sm">
-                                Add
-                              </Button>
-                            </div>
-                            {manualEmails.length > 0 && (
-                              <div className="space-y-1 max-h-32 overflow-y-auto">
-                                {manualEmails.map((email) => (
-                                  <div key={email} className="flex items-center justify-between rounded border p-2 text-sm bg-muted/40">
-                                    <span>{email}</span>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-6 w-6 p-0"
-                                      onClick={() => handleRemoveManualEmail(email)}
-                                    >
-                                      <Trash2 className="h-3 w-3" />
-                                    </Button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            <p className="text-xs text-muted-foreground mt-2">
-                              Add email addresses for employees from other departments
-                            </p>
+                        <div className="mt-4 pt-4 border-t">
+                          <Label className="text-sm font-medium mb-2 block">Add Email Manually (Other Department)</Label>
+                          <div className="flex gap-2 mb-2">
+                            <Input
+                              placeholder="Enter email address..."
+                              value={manualEmail}
+                              onChange={(e) => setManualEmail(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  handleAddManualEmail()
+                                }
+                              }}
+                              className="flex-1"
+                            />
+                            <Button onClick={handleAddManualEmail} variant="outline" size="sm">
+                              Add
+                            </Button>
                           </div>
-                        )}
+                          {manualEmails.length > 0 && (
+                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                              {manualEmails.map((email) => (
+                                <div key={email} className="flex items-center justify-between rounded border p-2 text-sm bg-muted/40">
+                                  <span>{email}</span>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 p-0"
+                                    onClick={() => handleRemoveManualEmail(email)}
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Add email addresses for employees from other departments
+                          </p>
+                        </div>
                       </div>
                     </div>
                     <div className="flex flex-col gap-2 pt-2">
@@ -1337,7 +1521,7 @@ export default function ProjectsPage() {
                         <Button
                           onClick={handleCollabSubmit}
                           disabled={
-                            selectedProjectIds.length === 0 || selectedMemberIds.length === 0 || isSubmittingCollab
+                            selectedProjectIds.length === 0 || (selectedMemberIds.length === 0 && manualEmails.length === 0) || isSubmittingCollab
                           }
                         >
                           {isSubmittingCollab ? (
@@ -1379,6 +1563,7 @@ export default function ProjectsPage() {
                     {filteredProjects.map((project) => {
                       const memberCount = project.members.length
                       const isExpanded = expandedManageProjectId === project.id
+                      const pendingInvites = pendingProjectInvites[project.id] || []
                       return (
                         <div key={project.id} className="rounded-lg border p-3">
                           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1397,6 +1582,11 @@ export default function ProjectsPage() {
                             >
                               <Users className="h-4 w-4" />
                               <span>{memberCount} collaborator{memberCount === 1 ? '' : 's'}</span>
+                              {pendingInvites.length > 0 && (
+                                <Badge variant="outline" className="text-xs border-amber-300 text-amber-700 bg-amber-50">
+                                  {pendingInvites.length} pending
+                                </Badge>
+                              )}
                             </Button>
                           </div>
                           {isExpanded && (
@@ -1438,6 +1628,22 @@ export default function ProjectsPage() {
                                     </div>
                                   )
                                 })
+                              )}
+                              {pendingInvites.length > 0 && (
+                                <div className="border rounded-md p-2 space-y-1 bg-muted/40">
+                                  <p className="text-xs font-medium text-muted-foreground">Pending invitations</p>
+                                  {pendingInvites.map((email) => (
+                                    <div key={email} className="text-xs flex items-center justify-between">
+                                      <span>{email}</span>
+                                      <Badge variant="outline" className="text-[10px] border-dashed">
+                                        Waiting
+                                      </Badge>
+                                    </div>
+                                  ))}
+                                  <p className="text-[11px] text-muted-foreground">
+                                    Pending invites clear automatically once the invitee joins the project.
+                                  </p>
+                                </div>
                               )}
                             </div>
                           )}

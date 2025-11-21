@@ -442,6 +442,25 @@ class ApiClient {
     return result
   }
 
+  async getProjectCollaborationRequests() {
+    return this.request('/projects/collaborations/requests', {
+      method: 'GET',
+    })
+  }
+
+  async getSentProjectCollaborationRequests() {
+    return this.request('/projects/collaborations/requests/sent', {
+      method: 'GET',
+    })
+  }
+
+  async respondProjectCollaborationRequest(requestId: string, accept: boolean) {
+    return this.request(`/projects/collaborations/${requestId}/respond`, {
+      method: 'POST',
+      body: JSON.stringify({ accept }),
+    })
+  }
+
   // Team - with caching (skips caching only for search queries)
   async getTeamMembers(params?: { department?: string; search?: string }, useCache: boolean = true) {
     const queryParams = new URLSearchParams()
@@ -655,6 +674,34 @@ class ApiClient {
     return this.request(`/subscriptions/${subscriptionId}/members/${memberId}/active`, {
       method: 'PUT',
       body: JSON.stringify({ isActive }),
+    })
+  }
+
+  async requestSubscriptionCollaboration(data: { subscriptionIds: string[]; memberIds: string[]; role?: 'viewer' | 'editor'; message?: string }) {
+    const result = await this.request('/subscriptions/collaborations/request', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    this.clearCache('/subscriptions')
+    return result
+  }
+
+  async getSubscriptionCollaborationRequests() {
+    return this.request('/subscriptions/collaborations/requests', {
+      method: 'GET',
+    })
+  }
+
+  async getSentSubscriptionCollaborationRequests() {
+    return this.request('/subscriptions/collaborations/requests/sent', {
+      method: 'GET',
+    })
+  }
+
+  async respondSubscriptionCollaborationRequest(requestId: string, accept: boolean) {
+    return this.request(`/subscriptions/collaborations/${requestId}/respond`, {
+      method: 'POST',
+      body: JSON.stringify({ accept }),
     })
   }
 

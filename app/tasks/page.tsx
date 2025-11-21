@@ -24,6 +24,8 @@ type TaskPriority = 'HIGH' | 'MEDIUM' | 'LOW'
 type RecurringType = 'DAILY' | 'WEEKLY' | 'MONTHLY'
 type ViewMode = 'list' | 'grid' | 'kanban'
 
+const isNewProductDesignDepartment = (value?: string | null) => value?.trim().toLowerCase() === 'new product design'
+
 interface Task {
   id: string
   title: string
@@ -54,6 +56,9 @@ interface Task {
     department?: string
   } | null
   comments?: TaskComment[]
+  imageCount?: number
+  videoCount?: number
+  link?: string
 }
 
 interface Project {
@@ -76,6 +81,9 @@ interface FormData {
   tags: string
   recurring: RecurringType | '' | 'none'
   assigneeId: string
+  imageCount: string
+  videoCount: string
+  link: string
 }
 
 interface TeamMemberInfo {
@@ -97,6 +105,9 @@ const createInitialFormData = (): FormData => ({
   tags: '',
   recurring: '',
   assigneeId: '',
+  imageCount: '',
+  videoCount: '',
+  link: '',
 })
 
 const initialFormData: FormData = createInitialFormData()
@@ -177,6 +188,16 @@ export default function TasksPage() {
     })
     return map
   }, [teamMembers])
+
+  const selectedProjectDepartment = useMemo(() => {
+    if (!formData.projectId) return null
+    const project = projects.find(project => project.id === formData.projectId)
+    return project?.department || null
+  }, [formData.projectId, projects])
+
+  const isEditingNewProductDesignTask = editingTask ? isNewProductDesignDepartment(editingTask.project?.department) : false
+  const userIsNewProductDesign = isNewProductDesignDepartment(user?.department)
+  const shouldShowMediaFields = userIsNewProductDesign || isNewProductDesignDepartment(selectedProjectDepartment) || isEditingNewProductDesignTask
 
   const availableTeamMembers = useMemo(() => {
     const normalizedDepartmentFilter = user?.department?.trim().toLowerCase() || null
@@ -491,6 +512,9 @@ export default function TasksPage() {
       tags: task.tags || '',
       recurring: task.recurring || '',
       assigneeId: firstAssigneeId,
+      imageCount: task.imageCount != null ? String(task.imageCount) : '',
+      videoCount: task.videoCount != null ? String(task.videoCount) : '',
+      link: task.link || '',
     })
     setIsDialogOpen(true)
     // Fetch assignable members when opening dialog
@@ -538,6 +562,13 @@ export default function TasksPage() {
 
       setIsSavingTask(true)
 
+      const parseCountInput = (value: string) => {
+        if (!value || value.trim() === '') return 0
+        const num = Number(value)
+        if (!Number.isFinite(num) || num < 0) return 0
+        return Math.round(num)
+      }
+
       const cleanData: any = {
         title: formData.title.trim(),
         description: formData.description?.trim() || null,
@@ -551,6 +582,9 @@ export default function TasksPage() {
         recurring: formData.recurring && formData.recurring !== 'none' && formData.recurring.trim() !== '' 
           ? formData.recurring 
           : null,
+        imageCount: parseCountInput(formData.imageCount),
+        videoCount: parseCountInput(formData.videoCount),
+        link: formData.link?.trim() || null,
       }
 
       // Add assignees if assigneeId is provided and user is admin/super admin
@@ -586,6 +620,13 @@ export default function TasksPage() {
 
       setIsSavingTask(true)
 
+      const parseCountInput = (value: string) => {
+        if (!value || value.trim() === '') return 0
+        const num = Number(value)
+        if (!Number.isFinite(num) || num < 0) return 0
+        return Math.round(num)
+      }
+
       const cleanData: any = {
         title: formData.title.trim(),
         description: formData.description?.trim() || null,
@@ -599,6 +640,9 @@ export default function TasksPage() {
         recurring: formData.recurring && formData.recurring !== 'none' && formData.recurring.trim() !== '' 
           ? formData.recurring 
           : null,
+        imageCount: parseCountInput(formData.imageCount),
+        videoCount: parseCountInput(formData.videoCount),
+        link: formData.link?.trim() || null,
       }
 
       // Add assignees if assigneeId is provided and user is admin/super admin
@@ -1075,6 +1119,12 @@ export default function TasksPage() {
     )
   }
 
+  const shouldShowMediaForTask = (task: Task) => {
+    if (isNewProductDesignDepartment(task.project?.department)) return true
+    if (userIsNewProductDesign) return true
+    return false
+  }
+
   const TaskCard = ({ task }: { task: Task }) => (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -1152,6 +1202,31 @@ export default function TasksPage() {
               <Badge variant="outline">{task.recurring}</Badge>
             )}
           </div>
+          {shouldShowMediaForTask(task) && (
+            <div className="flex flex-wrap gap-2 mb-3 text-sm text-indigo-700">
+              <Badge variant="secondary" className="bg-indigo-50 text-indigo-700 border-indigo-200">
+                Images: {task.imageCount ?? 0}
+              </Badge>
+              <Badge variant="secondary" className="bg-indigo-50 text-indigo-700 border-indigo-200">
+                Videos: {task.videoCount ?? 0}
+              </Badge>
+            </div>
+          )}
+          {task.link && (
+            <div className="mb-3 text-sm">
+              <a 
+                href={task.link} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-800 underline flex items-center gap-1"
+              >
+                <span>Link</span>
+                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+            </div>
+          )}
           <div className="flex items-center gap-4 text-sm text-muted-foreground flex-shrink-0 mb-3">
             {task.startDate && (
               <div className="flex items-center gap-1">
@@ -1331,6 +1406,8 @@ export default function TasksPage() {
       )
     }
 
+    const showAssetsColumn = userIsNewProductDesign || filteredAndSorted.some(task => isNewProductDesignDepartment(task.project?.department))
+
     if (viewMode === 'list') {
       return (
         <Card>
@@ -1342,6 +1419,7 @@ export default function TasksPage() {
                   <th className="text-left p-4">Status</th>
                   <th className="text-left p-4">Priority</th>
                   <th className="text-left p-4">Project</th>
+                  {showAssetsColumn && <th className="text-left p-4">Assets</th>}
                   <th className="text-left p-4">Start Date</th>
                   <th className="text-left p-4">Due Date</th>
                   <th className="text-left p-4">Actions</th>
@@ -1422,6 +1500,36 @@ export default function TasksPage() {
                         <span className="text-muted-foreground">-</span>
                       )}
                     </td>
+                    {showAssetsColumn && (
+                      <td className="p-4">
+                        <div className="space-y-1 text-sm">
+                          {shouldShowMediaForTask(task) && (
+                            <>
+                              <div>Images: {task.imageCount ?? 0}</div>
+                              <div>Videos: {task.videoCount ?? 0}</div>
+                            </>
+                          )}
+                          {task.link && (
+                            <div>
+                              <a 
+                                href={task.link} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:text-blue-800 underline flex items-center gap-1"
+                              >
+                                Link
+                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                </svg>
+                              </a>
+                            </div>
+                          )}
+                          {!shouldShowMediaForTask(task) && !task.link && (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </div>
+                      </td>
+                    )}
                     <td className="p-4">
                       {task.startDate ? format(new Date(task.startDate), 'MMM dd, yyyy') : '-'}
                     </td>
@@ -1608,7 +1716,51 @@ export default function TasksPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              {shouldShowMediaFields && (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <Label htmlFor="imageCount">Images Created</Label>
+                    <Input
+                      id="imageCount"
+                      type="number"
+                      min={0}
+                      value={formData.imageCount}
+                      onChange={(e) => {
+                        const value = e.target.value
+                        updateFormField('imageCount', value === '' ? '' : value)
+                      }}
+                      placeholder="Enter image count"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="videoCount">Videos Created</Label>
+                    <Input
+                      id="videoCount"
+                      type="number"
+                      min={0}
+                      value={formData.videoCount}
+                      onChange={(e) => {
+                        const value = e.target.value
+                        updateFormField('videoCount', value === '' ? '' : value)
+                      }}
+                      placeholder="Enter video count"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <Label htmlFor="link">Link</Label>
+                <Input
+                  id="link"
+                  type="url"
+                  value={formData.link}
+                  onChange={(e) => updateFormField('link', e.target.value)}
+                  placeholder="Enter link"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="status">Status</Label>
                   <Select
@@ -1624,6 +1776,29 @@ export default function TasksPage() {
                       <SelectItem value="YTS">Yet to Start</SelectItem>
                       <SelectItem value="ON_HOLD">On Hold</SelectItem>
                       <SelectItem value="RECURRING">Recurring</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="recurring">Recurring</Label>
+                  <Select
+                    value={formData.recurring || 'none'}
+                    onValueChange={(value) => {
+                      const recurringValue = value === 'none' ? '' : value as RecurringType
+                      updateFormField('recurring', recurringValue)
+                      if (recurringValue !== '') {
+                        updateFormField('status', 'RECURRING')
+                      }
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="None" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="DAILY">Daily</SelectItem>
+                      <SelectItem value="WEEKLY">Weekly</SelectItem>
+                      <SelectItem value="MONTHLY">Monthly</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1666,29 +1841,6 @@ export default function TasksPage() {
                     onChange={(e) => updateFormField('dueDate', e.target.value)}
                   />
                 </div>
-              </div>
-              <div>
-                <Label htmlFor="recurring">Recurring</Label>
-                <Select
-                  value={formData.recurring || 'none'}
-                  onValueChange={(value) => {
-                    const recurringValue = value === 'none' ? '' : value as RecurringType
-                    updateFormField('recurring', recurringValue)
-                    if (recurringValue !== '') {
-                      updateFormField('status', 'RECURRING')
-                    }
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="None" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
-                    <SelectItem value="DAILY">Daily</SelectItem>
-                    <SelectItem value="WEEKLY">Weekly</SelectItem>
-                    <SelectItem value="MONTHLY">Monthly</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -1741,132 +1893,134 @@ export default function TasksPage() {
                 </div>
               </div>
 
-              <div>
-                <Label htmlFor="tags">Tags</Label>
-                <Input
-                  id="tags"
-                  name="tags"
-                  value={formData.tags}
-                  onChange={(e) => updateFormField('tags', e.target.value)}
-                  placeholder="Comma-separated tags"
-                />
-              </div>
-
-              {/* Assignee field - only for admin and super admin */}
-              {user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') && (
+              <div className={`grid gap-4 ${user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') ? 'grid-cols-2' : 'grid-cols-1'}`}>
                 <div>
-                  <Label htmlFor="assignee">Assign Task To (Optional)</Label>
-                  <Popover 
-                    open={isAssigneeDropdownOpen} 
-                    onOpenChange={(open) => {
-                      setIsAssigneeDropdownOpen(open)
-                      if (!open) {
-                        // Reset search when closing
-                        setAssigneeSearchQuery('')
-                        // Clear timeout
-                        if (searchTimeoutRef.current) {
-                          clearTimeout(searchTimeoutRef.current)
-                          searchTimeoutRef.current = null
-                        }
-                        // Reload full list when closing
-                        if (user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
-                          fetchAssignableMembers()
-                        }
-                      }
-                    }}
-                  >
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className="w-full justify-start text-left font-normal"
-                        onClick={() => {
-                          setIsAssigneeDropdownOpen(true)
-                          if (assignableMembers.length === 0) {
+                  <Label htmlFor="tags">Tags</Label>
+                  <Input
+                    id="tags"
+                    name="tags"
+                    value={formData.tags}
+                    onChange={(e) => updateFormField('tags', e.target.value)}
+                    placeholder="Comma-separated tags"
+                  />
+                </div>
+
+                {/* Assignee field - only for admin and super admin */}
+                {user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') && (
+                  <div>
+                    <Label htmlFor="assignee">Assign Task To (Optional)</Label>
+                    <Popover 
+                      open={isAssigneeDropdownOpen} 
+                      onOpenChange={(open) => {
+                        setIsAssigneeDropdownOpen(open)
+                        if (!open) {
+                          // Reset search when closing
+                          setAssigneeSearchQuery('')
+                          // Clear timeout
+                          if (searchTimeoutRef.current) {
+                            clearTimeout(searchTimeoutRef.current)
+                            searchTimeoutRef.current = null
+                          }
+                          // Reload full list when closing
+                          if (user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
                             fetchAssignableMembers()
                           }
-                        }}
-                      >
-                        {formData.assigneeId
-                          ? (() => {
-                              const selected = assignableMembers.find(m => m.id === formData.assigneeId)
-                              return selected ? (selected.name || selected.email) : 'Select assignee...'
-                            })()
-                          : 'Select assignee...'}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-full p-0" align="start">
-                      <div className="p-2">
-                        <Input
-                          placeholder="Search by name or email..."
-                          value={assigneeSearchQuery}
-                          onChange={(e) => {
-                            const query = e.target.value
-                            setAssigneeSearchQuery(query)
-                            
-                            // Clear existing timeout
-                            if (searchTimeoutRef.current) {
-                              clearTimeout(searchTimeoutRef.current)
+                        }
+                      }}
+                    >
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-full justify-start text-left font-normal"
+                          onClick={() => {
+                            setIsAssigneeDropdownOpen(true)
+                            if (assignableMembers.length === 0) {
+                              fetchAssignableMembers()
                             }
-                            
-                            // Set new timeout for debounced search
-                            searchTimeoutRef.current = setTimeout(() => {
-                              fetchAssignableMembers(query)
-                            }, 300)
                           }}
-                          className="mb-2"
-                        />
-                        <div className="max-h-60 overflow-y-auto">
-                          {assignableMembers.length === 0 ? (
-                            <div className="p-2 text-sm text-muted-foreground text-center">
-                              {assigneeSearchQuery ? 'No members found' : 'Loading...'}
-                            </div>
-                          ) : (
-                            assignableMembers.map((member) => (
-                              <div
-                                key={member.id}
-                                className="p-2 hover:bg-accent cursor-pointer rounded-sm"
+                        >
+                          {formData.assigneeId
+                            ? (() => {
+                                const selected = assignableMembers.find(m => m.id === formData.assigneeId)
+                                return selected ? (selected.name || selected.email) : 'Select assignee...'
+                              })()
+                            : 'Select assignee...'}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-full p-0" align="start">
+                        <div className="p-2">
+                          <Input
+                            placeholder="Search by name or email..."
+                            value={assigneeSearchQuery}
+                            onChange={(e) => {
+                              const query = e.target.value
+                              setAssigneeSearchQuery(query)
+                              
+                              // Clear existing timeout
+                              if (searchTimeoutRef.current) {
+                                clearTimeout(searchTimeoutRef.current)
+                              }
+                              
+                              // Set new timeout for debounced search
+                              searchTimeoutRef.current = setTimeout(() => {
+                                fetchAssignableMembers(query)
+                              }, 300)
+                            }}
+                            className="mb-2"
+                          />
+                          <div className="max-h-60 overflow-y-auto">
+                            {assignableMembers.length === 0 ? (
+                              <div className="p-2 text-sm text-muted-foreground text-center">
+                                {assigneeSearchQuery ? 'No members found' : 'Loading...'}
+                              </div>
+                            ) : (
+                              assignableMembers.map((member) => (
+                                <div
+                                  key={member.id}
+                                  className="p-2 hover:bg-accent cursor-pointer rounded-sm"
+                                  onClick={() => {
+                                    updateFormField('assigneeId', member.id)
+                                    setIsAssigneeDropdownOpen(false)
+                                    setAssigneeSearchQuery('')
+                                  }}
+                                >
+                                  <div className="font-medium text-sm">{member.name || member.email}</div>
+                                  {member.name && (
+                                    <div className="text-xs text-muted-foreground">{member.email}</div>
+                                  )}
+                                  {member.department && (
+                                    <div className="text-xs text-muted-foreground">Dept: {member.department}</div>
+                                  )}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                          {formData.assigneeId && (
+                            <div className="mt-2 pt-2 border-t">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full text-xs"
                                 onClick={() => {
-                                  updateFormField('assigneeId', member.id)
+                                  updateFormField('assigneeId', '')
                                   setIsAssigneeDropdownOpen(false)
-                                  setAssigneeSearchQuery('')
                                 }}
                               >
-                                <div className="font-medium text-sm">{member.name || member.email}</div>
-                                {member.name && (
-                                  <div className="text-xs text-muted-foreground">{member.email}</div>
-                                )}
-                                {member.department && (
-                                  <div className="text-xs text-muted-foreground">Dept: {member.department}</div>
-                                )}
-                              </div>
-                            ))
+                                Clear Selection
+                              </Button>
+                            </div>
                           )}
                         </div>
-                        {formData.assigneeId && (
-                          <div className="mt-2 pt-2 border-t">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="w-full text-xs"
-                              onClick={() => {
-                                updateFormField('assigneeId', '')
-                                setIsAssigneeDropdownOpen(false)
-                              }}
-                            >
-                              Clear Selection
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {user.role === 'ADMIN' 
-                      ? 'Assign task to a member from your department'
-                      : 'Assign task to any member'}
-                  </p>
-                </div>
-              )}
+                      </PopoverContent>
+                    </Popover>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {user.role === 'ADMIN' 
+                        ? 'Assign task to a member from your department'
+                        : 'Assign task to any member'}
+                    </p>
+                  </div>
+                )}
+              </div>
 
               <div className="flex justify-end gap-2">
                 <Button

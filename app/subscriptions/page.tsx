@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { MainLayout } from '@/components/layout/main-layout'
 import { apiClient } from '@/lib/api'
@@ -12,10 +12,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { motion } from 'framer-motion'
-import { Plus, Edit, Trash2, Users as UsersIcon, Download, CreditCard, DollarSign, TrendingUp } from 'lucide-react'
+import { Plus, Edit, Trash2, Users as UsersIcon, Download, CreditCard, DollarSign, TrendingUp, Loader2 } from 'lucide-react'
 import { format } from 'date-fns'
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip as RechartsTooltip } from 'recharts'
 
@@ -89,6 +90,17 @@ export default function SubscriptionsPage() {
   const [selectedSubscription, setSelectedSubscription] = useState<Subscription | null>(null)
   const [formData, setFormData] = useState<FormData>(initialFormData)
   const [searchQuery, setSearchQuery] = useState('')
+  const [isBulkCollabDialogOpen, setIsBulkCollabDialogOpen] = useState(false)
+  const [selectedSubscriptionIds, setSelectedSubscriptionIds] = useState<string[]>([])
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([])
+  const [isSubmittingBulkCollab, setIsSubmittingBulkCollab] = useState(false)
+  const [collabSummary, setCollabSummary] = useState<any>(null)
+  const [isCollabSummaryDialogOpen, setIsCollabSummaryDialogOpen] = useState(false)
+  const [memberSearch, setMemberSearch] = useState('')
+  const [collabDialogTab, setCollabDialogTab] = useState<'invite' | 'manage'>('invite')
+  const [expandedManageSubscriptionId, setExpandedManageSubscriptionId] = useState<string | null>(null)
+  const [removingMemberKey, setRemovingMemberKey] = useState<string | null>(null)
+  const [currentUser, setCurrentUser] = useState<{ id: string; name?: string; email?: string } | null>(null)
 
   const fetchSubscriptions = useCallback(async () => {
     try {
@@ -137,6 +149,27 @@ export default function SubscriptionsPage() {
     checkAccess()
     fetchSubscriptions()
     fetchUsers()
+    
+    // Get current user
+    const getCurrentUser = async () => {
+      try {
+        const user = await apiClient.getUserRole()
+        setCurrentUser({ id: user.id, name: user.name, email: user.email })
+      } catch (error) {
+        console.error('Failed to fetch current user:', error)
+      }
+    }
+    getCurrentUser()
+
+    // Listen for permission updates
+    const handlePermissionUpdate = () => {
+      checkAccess()
+    }
+    window.addEventListener('userPermissionsUpdated', handlePermissionUpdate)
+
+    return () => {
+      window.removeEventListener('userPermissionsUpdated', handlePermissionUpdate)
+    }
   }, [router, fetchSubscriptions, fetchUsers])
 
   const resetForm = useCallback(() => {
@@ -243,6 +276,143 @@ export default function SubscriptionsPage() {
       alert('Failed to remove member')
     }
   }, [selectedSubscription, fetchSubscriptions])
+
+  // Bulk collaboration handlers
+  const filteredMembers = useMemo(() => {
+    const search = memberSearch.trim().toLowerCase()
+    return allUsers
+      .filter((user) => user.id !== currentUser?.id)
+      .filter((user) => {
+        if (!search) return true
+        const name = (user.name || '').toLowerCase()
+        const email = user.email.toLowerCase()
+        return name.includes(search) || email.includes(search)
+      })
+  }, [allUsers, memberSearch, currentUser])
+
+  const totalCollaborationMembers = useMemo(
+    () => subscriptions.reduce((total, subscription) => total + subscription.members.length, 0),
+    [subscriptions],
+  )
+
+  const toggleSubscriptionSelection = useCallback((subscriptionId: string) => {
+    setSelectedSubscriptionIds(prev =>
+      prev.includes(subscriptionId) ? prev.filter(id => id !== subscriptionId) : [...prev, subscriptionId],
+    )
+  }, [])
+
+  const toggleMemberSelection = useCallback((memberId: string) => {
+    setSelectedMemberIds(prev =>
+      prev.includes(memberId) ? prev.filter(id => id !== memberId) : [...prev, memberId],
+    )
+  }, [])
+
+  const resetBulkCollabState = useCallback(() => {
+    setSelectedSubscriptionIds([])
+    setSelectedMemberIds([])
+    setMemberSearch('')
+    setExpandedManageSubscriptionId(null)
+  }, [])
+
+  const handleBulkCollabSubmit = useCallback(async () => {
+    if (selectedSubscriptionIds.length === 0 || selectedMemberIds.length === 0) {
+      return
+    }
+    setIsSubmittingBulkCollab(true)
+    try {
+      const response = await apiClient.requestSubscriptionCollaboration({
+        subscriptionIds: selectedSubscriptionIds,
+        memberIds: selectedMemberIds,
+        role: 'viewer',
+      })
+      const summary = (response as { summary?: any })?.summary
+      setCollabSummary(
+        summary ?? {
+          created: 0,
+          updated: 0,
+          skipped: 0,
+          details: [],
+        },
+      )
+      setIsCollabSummaryDialogOpen(true)
+      setIsBulkCollabDialogOpen(false)
+      resetBulkCollabState()
+      await fetchSubscriptions()
+    } catch (error: any) {
+      console.error('Failed to send collaboration requests:', error)
+      alert(error.message || 'Failed to send collaboration requests')
+    } finally {
+      setIsSubmittingBulkCollab(false)
+    }
+  }, [selectedSubscriptionIds, selectedMemberIds, fetchSubscriptions, resetBulkCollabState])
+
+  const handleOpenBulkCollab = useCallback(() => {
+    if (subscriptions.length === 0) {
+      alert('No subscriptions available for collaboration.')
+      return
+    }
+    setCollabDialogTab('invite')
+    setIsBulkCollabDialogOpen(true)
+  }, [subscriptions])
+
+  const handleBulkDialogChange = useCallback((open: boolean) => {
+    setIsBulkCollabDialogOpen(open)
+    if (!open) {
+      resetBulkCollabState()
+      setCollabDialogTab('invite')
+    }
+  }, [resetBulkCollabState])
+
+  const toggleManageSubscription = useCallback((subscriptionId: string) => {
+    setExpandedManageSubscriptionId(prev => prev === subscriptionId ? null : subscriptionId)
+  }, [])
+
+  const handleRemoveMemberFromSubscription = useCallback(async (subscriptionId: string, memberId: string) => {
+    const memberKey = `${subscriptionId}:${memberId}`
+    setRemovingMemberKey(memberKey)
+    try {
+      await apiClient.removeSubscriptionMember(subscriptionId, memberId)
+      await fetchSubscriptions()
+    } catch (error) {
+      console.error('Failed to remove member:', error)
+      alert('Failed to remove member')
+    } finally {
+      setRemovingMemberKey(null)
+    }
+  }, [fetchSubscriptions])
+
+  const handleCollabSummaryDialogChange = useCallback((open: boolean) => {
+    setIsCollabSummaryDialogOpen(open)
+    if (!open) {
+      setCollabSummary(null)
+    }
+  }, [])
+
+  const allSubscriptionsSelected = useMemo(
+    () => subscriptions.length > 0 && selectedSubscriptionIds.length === subscriptions.length,
+    [subscriptions.length, selectedSubscriptionIds.length],
+  )
+
+  const allVisibleMembersSelected = useMemo(
+    () => filteredMembers.length > 0 && selectedMemberIds.length === filteredMembers.length,
+    [filteredMembers.length, selectedMemberIds.length],
+  )
+
+  const handleSelectAllSubscriptions = useCallback(() => {
+    if (allSubscriptionsSelected) {
+      setSelectedSubscriptionIds([])
+    } else {
+      setSelectedSubscriptionIds(subscriptions.map(s => s.id))
+    }
+  }, [allSubscriptionsSelected, subscriptions])
+
+  const handleSelectAllMembers = useCallback(() => {
+    if (allVisibleMembersSelected) {
+      setSelectedMemberIds([])
+    } else {
+      setSelectedMemberIds(filteredMembers.map(m => m.id))
+    }
+  }, [allVisibleMembersSelected, filteredMembers])
 
   const handleExport = () => {
     const csv = [
@@ -384,15 +554,7 @@ export default function SubscriptionsPage() {
             <p className="text-muted-foreground">Manage your subscriptions and collaborate with your team</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => {
-              // Open a dialog to manage collaboration for all subscriptions
-              if (subscriptions.length > 0) {
-                // For now, just show a message - can be enhanced later
-                alert('Collaboration feature: You can add members to individual subscriptions from the table actions.')
-              } else {
-                alert('No subscriptions available for collaboration.')
-              }
-            }}>
+            <Button variant="outline" onClick={handleOpenBulkCollab}>
               <UsersIcon className="h-4 w-4 mr-2" />
               Collab
             </Button>
@@ -880,6 +1042,316 @@ export default function SubscriptionsPage() {
                 </div>
               )}
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Bulk Collaboration Dialog */}
+        <Dialog open={isBulkCollabDialogOpen} onOpenChange={handleBulkDialogChange}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Collaborate on Subscriptions</DialogTitle>
+              <DialogDescription>
+                Invite new members or review existing collaborations across your subscriptions.
+              </DialogDescription>
+            </DialogHeader>
+            <Tabs value={collabDialogTab} onValueChange={(value) => setCollabDialogTab(value as 'invite' | 'manage')}>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="invite">Invite Members</TabsTrigger>
+                <TabsTrigger value="manage">Manage Collaborations</TabsTrigger>
+              </TabsList>
+              <TabsContent value="invite" className="mt-4 space-y-4">
+                {subscriptions.length === 0 ? (
+                  <div className="p-4 text-sm text-muted-foreground border rounded-lg bg-muted/40">
+                    There are no subscriptions available right now.
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid gap-6 md:grid-cols-2">
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <Label className="text-sm font-medium">Subscriptions</Label>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{selectedSubscriptionIds.length} selected</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={handleSelectAllSubscriptions}
+                              disabled={subscriptions.length === 0}
+                            >
+                              {allSubscriptionsSelected ? 'Clear All' : 'Select All'}
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                          {subscriptions.map((subscription) => {
+                            const isSelected = selectedSubscriptionIds.includes(subscription.id)
+                            return (
+                              <label
+                                key={subscription.id}
+                                className={`flex gap-3 rounded-lg border p-3 text-sm cursor-pointer transition-colors ${
+                                  isSelected ? 'border-primary bg-primary/5' : 'hover:border-primary/40'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="mt-1 h-4 w-4 rounded border-muted-foreground"
+                                  checked={isSelected}
+                                  onChange={() => toggleSubscriptionSelection(subscription.id)}
+                                />
+                                <div className="flex-1">
+                                  <p className="font-medium">{subscription.name}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {subscription.currency} {subscription.amount} • {subscription.billingCycle}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    {subscription.members.length} member{subscription.members.length === 1 ? '' : 's'} currently
+                                  </p>
+                                </div>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <Label className="text-sm font-medium">Members</Label>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{selectedMemberIds.length} selected</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={handleSelectAllMembers}
+                              disabled={filteredMembers.length === 0}
+                            >
+                              {allVisibleMembersSelected ? 'Clear All' : 'Select Visible'}
+                            </Button>
+                          </div>
+                        </div>
+                        <Input
+                          placeholder="Search team..."
+                          value={memberSearch}
+                          onChange={(e) => setMemberSearch(e.target.value)}
+                          className="mb-3"
+                        />
+                        <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                          {filteredMembers.length === 0 ? (
+                            <div className="text-sm text-muted-foreground p-3 border rounded-lg">No members found.</div>
+                          ) : (
+                            filteredMembers.map((member) => {
+                              const isSelected = selectedMemberIds.includes(member.id)
+                              return (
+                                <label
+                                  key={member.id}
+                                  className={`flex gap-3 rounded-lg border p-3 text-sm cursor-pointer transition-colors ${
+                                    isSelected ? 'border-primary bg-primary/5' : 'hover:border-primary/40'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="mt-1 h-4 w-4 rounded border-muted-foreground"
+                                    checked={isSelected}
+                                    onChange={() => toggleMemberSelection(member.id)}
+                                  />
+                                  <div>
+                                    <p className="font-medium">{member.name || member.email}</p>
+                                    <p className="text-xs text-muted-foreground">{member.email}</p>
+                                  </div>
+                                </label>
+                              )
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2 pt-2">
+                      <p className="text-xs text-muted-foreground">
+                        Selected subscriptions: {selectedSubscriptionIds.length} · Selected members: {selectedMemberIds.length}
+                      </p>
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" onClick={() => handleBulkDialogChange(false)}>
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={handleBulkCollabSubmit}
+                          disabled={
+                            selectedSubscriptionIds.length === 0 || selectedMemberIds.length === 0 || isSubmittingBulkCollab
+                          }
+                        >
+                          {isSubmittingBulkCollab ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Sending...
+                            </>
+                          ) : (
+                            'Send Collaboration'
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </TabsContent>
+              <TabsContent value="manage" className="mt-4 space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-xl border p-4">
+                    <p className="text-xs text-muted-foreground">Total Subscriptions</p>
+                    <p className="text-2xl font-semibold">{subscriptions.length}</p>
+                  </div>
+                  <div className="rounded-xl border p-4">
+                    <p className="text-xs text-muted-foreground">Total Collaborators</p>
+                    <p className="text-2xl font-semibold">{totalCollaborationMembers}</p>
+                  </div>
+                </div>
+                {subscriptions.length === 0 ? (
+                  <div className="p-4 text-sm text-muted-foreground border rounded-lg bg-muted/40">
+                    No subscriptions available to manage.
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                    {subscriptions.map((subscription) => {
+                      const memberCount = subscription.members.length
+                      const isExpanded = expandedManageSubscriptionId === subscription.id
+                      return (
+                        <div key={subscription.id} className="rounded-lg border p-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold">{subscription.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {subscription.currency} {subscription.amount} • {subscription.billingCycle}
+                              </p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="flex items-center gap-2"
+                              onClick={() => toggleManageSubscription(subscription.id)}
+                            >
+                              <UsersIcon className="h-4 w-4" />
+                              <span>{memberCount} collaborator{memberCount === 1 ? '' : 's'}</span>
+                            </Button>
+                          </div>
+                          {isExpanded && (
+                            <div className="mt-3 space-y-2">
+                              {memberCount === 0 ? (
+                                <p className="text-sm text-muted-foreground">No collaborators yet.</p>
+                              ) : (
+                                subscription.members.map((member) => {
+                                  const memberKey = `${subscription.id}:${member.id}`
+                                  const isRemoving = removingMemberKey === memberKey
+                                  return (
+                                    <div
+                                      key={member.id}
+                                      className="flex items-center justify-between rounded border p-2 text-sm"
+                                    >
+                                      <div>
+                                        <p className="font-medium">{member.user.name || member.user.email}</p>
+                                        <p className="text-xs text-muted-foreground capitalize">{member.role}</p>
+                                      </div>
+                                      <Button
+                                        variant="destructive"
+                                        size="sm"
+                                        className="flex items-center gap-1"
+                                        onClick={() => handleRemoveMemberFromSubscription(subscription.id, member.id)}
+                                        disabled={isRemoving}
+                                      >
+                                        {isRemoving ? (
+                                          <>
+                                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                            Removing...
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Trash2 className="h-3 w-3" />
+                                            Remove
+                                          </>
+                                        )}
+                                      </Button>
+                                    </div>
+                                  )
+                                })
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <Button variant="outline" onClick={() => handleBulkDialogChange(false)}>
+                    Close
+                  </Button>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </DialogContent>
+        </Dialog>
+
+        {/* Collaboration Summary Dialog */}
+        <Dialog open={isCollabSummaryDialogOpen} onOpenChange={handleCollabSummaryDialogChange}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Collaboration Summary</DialogTitle>
+              <DialogDescription>Here&apos;s what happened with your collaboration request.</DialogDescription>
+            </DialogHeader>
+            {collabSummary ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="rounded-xl border p-4 text-center">
+                    <p className="text-xs text-muted-foreground">Created</p>
+                    <p className="text-lg font-semibold">{collabSummary.created}</p>
+                  </div>
+                  <div className="rounded-xl border p-4 text-center">
+                    <p className="text-xs text-muted-foreground">Updated</p>
+                    <p className="text-lg font-semibold">{collabSummary.updated || 0}</p>
+                  </div>
+                  <div className="rounded-xl border p-4 text-center">
+                    <p className="text-xs text-muted-foreground">Skipped</p>
+                    <p className="text-lg font-semibold">{collabSummary.skipped}</p>
+                  </div>
+                </div>
+                {collabSummary.inaccessibleSubscriptionCount ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    {collabSummary.inaccessibleSubscriptionCount} subscription
+                    {collabSummary.inaccessibleSubscriptionCount > 1 ? 's were' : ' was'} not available for collaboration
+                  </div>
+                ) : null}
+                {collabSummary.details && collabSummary.details.length === 0 ? (
+                  <div className="text-sm text-muted-foreground p-4 border rounded-lg">
+                    No collaboration changes were made.
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {collabSummary.details?.map((detail: any, index: number) => (
+                      <div key={index} className="rounded-lg border p-3 text-sm">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <p className="font-medium">{detail.memberName || detail.memberEmail}</p>
+                            <p className="text-xs text-muted-foreground">{detail.memberEmail}</p>
+                          </div>
+                          <Badge variant={detail.action === 'created' ? 'default' : 'secondary'}>
+                            {detail.action}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-2">
+                          {detail.subscriptionCount} subscription{detail.subscriptionCount === 1 ? '' : 's'}
+                          {detail.note && ` • ${detail.note}`}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Button onClick={() => handleCollabSummaryDialogChange(false)}>Close</Button>
+              </div>
+            ) : (
+              <div className="text-sm text-muted-foreground p-4">
+                No summary available. Please try sending the collaboration request again.
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       </div>

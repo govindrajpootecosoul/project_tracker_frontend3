@@ -174,6 +174,17 @@ export default function CredentialsPage() {
       })
   }, [allUsers, currentUser?.id, memberSearch])
 
+  const allCredentialsSelected = useMemo(() => {
+    if (publicCredentials.length === 0) return false
+    return selectedCredentialIds.length === publicCredentials.length
+  }, [publicCredentials, selectedCredentialIds])
+
+  const visibleMemberIds = useMemo(() => filteredMembers.map((member) => member.id), [filteredMembers])
+  const allVisibleMembersSelected = useMemo(() => {
+    if (visibleMemberIds.length === 0) return false
+    return visibleMemberIds.every((id) => selectedMemberIds.includes(id))
+  }, [visibleMemberIds, selectedMemberIds])
+
   const fetchUsers = useCallback(async () => {
     try {
       const data = await apiClient.getTeamUsers()
@@ -480,6 +491,24 @@ export default function CredentialsPage() {
     },
     [resetBulkCollabState],
   )
+
+  const handleSelectAllCredentials = useCallback(() => {
+    if (publicCredentials.length === 0) return
+    if (allCredentialsSelected) {
+      setSelectedCredentialIds([])
+    } else {
+      setSelectedCredentialIds(publicCredentials.map((credential) => credential.id))
+    }
+  }, [allCredentialsSelected, publicCredentials])
+
+  const handleSelectAllMembers = useCallback(() => {
+    if (visibleMemberIds.length === 0) return
+    if (allVisibleMembersSelected) {
+      setSelectedMemberIds((prev) => prev.filter((id) => !visibleMemberIds.includes(id)))
+    } else {
+      setSelectedMemberIds((prev) => Array.from(new Set([...prev, ...visibleMemberIds])))
+    }
+  }, [allVisibleMembersSelected, visibleMemberIds])
 
   const toggleManageCredential = useCallback((credentialId: string) => {
     setExpandedManageCredentialId(prev => (prev === credentialId ? null : credentialId))
@@ -806,7 +835,19 @@ export default function CredentialsPage() {
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <Label className="text-sm font-medium">Public Credentials</Label>
-                          <span className="text-xs text-muted-foreground">{selectedCredentialIds.length} selected</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{selectedCredentialIds.length} selected</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={handleSelectAllCredentials}
+                              disabled={publicCredentials.length === 0}
+                            >
+                              {allCredentialsSelected ? 'Clear All' : 'Select All'}
+                            </Button>
+                          </div>
                         </div>
                         <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
                           {publicCredentials.map((credential) => {
@@ -841,7 +882,19 @@ export default function CredentialsPage() {
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <Label className="text-sm font-medium">Members</Label>
-                          <span className="text-xs text-muted-foreground">{selectedMemberIds.length} selected</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{selectedMemberIds.length} selected</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={handleSelectAllMembers}
+                              disabled={filteredMembers.length === 0}
+                            >
+                              {allVisibleMembersSelected ? 'Clear All' : 'Select Visible'}
+                            </Button>
+                          </div>
                         </div>
                         <Input
                           placeholder="Search team..."
