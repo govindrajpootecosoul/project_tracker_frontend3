@@ -45,6 +45,19 @@ const PROJECTS_CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 let projectsCache: Project[] | null = null
 let projectsCacheTimestamp = 0
 
+const normalizeDepartmentNames = (departments: unknown): string[] => {
+  if (!Array.isArray(departments)) return []
+  const names = departments
+    .map((dept) => {
+      if (typeof dept === 'string') return dept
+      if (dept && typeof (dept as any).name === 'string') return (dept as any).name as string
+      return null
+    })
+    .filter((name): name is string => Boolean(name))
+
+  return Array.from(new Set(names.map((n) => n.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+}
+
 export default function ProjectsPage() {
   const router = useRouter()
   const [projects, setProjects] = useState<Project[]>(() => projectsCache ?? [])
@@ -128,7 +141,7 @@ export default function ProjectsPage() {
   const fetchDepartments = useCallback(async () => {
     try {
       const departmentsData = await apiClient.getDepartments()
-      setDepartments(departmentsData as string[])
+      setDepartments(normalizeDepartmentNames(departmentsData))
     } catch (error) {
       console.error('Failed to fetch departments:', error)
     }

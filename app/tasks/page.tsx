@@ -26,6 +26,19 @@ type ViewMode = 'list' | 'grid' | 'kanban'
 
 const isNewProductDesignDepartment = (value?: string | null) => value?.trim().toLowerCase() === 'new product design'
 
+const normalizeDepartmentNames = (departments: unknown): string[] => {
+  if (!Array.isArray(departments)) return []
+  const names = departments
+    .map((dept) => {
+      if (typeof dept === 'string') return dept
+      if (dept && typeof (dept as any).name === 'string') return (dept as any).name as string
+      return null
+    })
+    .filter((name): name is string => Boolean(name))
+
+  return Array.from(new Set(names.map((n) => n.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+}
+
 interface Task {
   id: string
   title: string
@@ -357,7 +370,7 @@ export default function TasksPage() {
   const fetchDepartments = useCallback(async () => {
     try {
       const departmentsData = await apiClient.getDepartments()
-      setDepartments(departmentsData as string[])
+      setDepartments(normalizeDepartmentNames(departmentsData))
     } catch (error) {
       console.error('Failed to fetch departments:', error)
     }

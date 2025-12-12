@@ -7,7 +7,7 @@ import { ClientAuthGuard } from '@/components/auth/client-auth-guard'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Project & Task Tracker',
+  title: 'Task Tracker',
   description: 'Manage projects, tasks, and team collaboration',
 }
 

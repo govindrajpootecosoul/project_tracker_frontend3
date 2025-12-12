@@ -1,5 +1,12 @@
 import type { TaskComment } from '@/types/comments'
 
+export interface DepartmentDto {
+  id?: string
+  name: string
+  userCount?: number
+  projectCount?: number
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'
 const CACHE_PREFIX = 'api_cache_'
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
@@ -176,7 +183,10 @@ class ApiClient {
           logData.fullError = error
         }
         
-        console.error('API Error:', logData)
+        // Only log if we have meaningful data to show
+        if (logData.error || logData.status) {
+          console.error('API Error:', logData)
+        }
       }
       
       // Provide more helpful error messages
@@ -497,7 +507,43 @@ class ApiClient {
   }
 
   async getDepartments() {
-    return this.request('/team/departments')
+    return this.request<DepartmentDto[] | string[]>('/team/departments')
+  }
+
+  async createDepartment(name: string) {
+    const result = await this.request('/team/departments', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    })
+    this.clearCache('/team/departments')
+    return result
+  }
+
+  async deleteDepartment(id: string) {
+    const result = await this.request(`/team/departments/${id}`, {
+      method: 'DELETE',
+    })
+    this.clearCache('/team/departments')
+    return result
+  }
+
+  async updateDepartment(id: string, name: string) {
+    const result = await this.request(`/team/departments/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name }),
+    })
+    this.clearCache('/team/departments')
+    this.clearCache('/team/members') // Clear team members cache since department names changed
+    return result
+  }
+
+  async updateMemberDepartment(userId: string, department?: string | null) {
+    const result = await this.request(`/team/members/${userId}/department`, {
+      method: 'PUT',
+      body: JSON.stringify({ department }),
+    })
+    this.clearCache('/team/members')
+    return result
   }
 
   // Email

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { MainLayout } from '@/components/layout/main-layout'
-import { apiClient } from '@/lib/api'
+import { apiClient, type DepartmentDto } from '@/lib/api'
 import { getToken } from '@/lib/auth-client'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { motion } from 'framer-motion'
-import { Mail, Send, CheckCircle2, Clock, AlertCircle, UserPlus, Search, Pencil, Trash2, Loader2 } from 'lucide-react'
+import { Mail, Send, CheckCircle2, Clock, AlertCircle, UserPlus, Search, Pencil, Trash2, Loader2, Settings, PlusCircle } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 
@@ -64,6 +64,14 @@ interface MemberFormState {
   hasSubscriptionAccess: boolean
 }
 
+interface DepartmentOption {
+  id?: string
+  name: string
+  userCount?: number
+  projectCount?: number
+  isLegacy?: boolean
+}
+
 const normalizeRoleForSelect = (role?: string): MemberRoleOption => {
   if (!role) return 'USER'
   const upper = role.toUpperCase().replace(/-/g, '_')
@@ -94,6 +102,51 @@ const getDefaultMemberForm = (): MemberFormState => ({
   hasSubscriptionAccess: false,
 })
 
+const mapDepartmentsResponse = (data: DepartmentDto[] | string[]): DepartmentOption[] => {
+  if (!Array.isArray(data)) return []
+  const normalized = data
+    .map((item) => {
+      if (typeof item === 'string') {
+        return { name: item, isLegacy: true }
+      }
+      return {
+        id: item.id,
+        name: item.name,
+        userCount: item.userCount,
+        projectCount: item.projectCount,
+        isLegacy: !item.id,
+      }
+    })
+    .filter((dept): dept is DepartmentOption => Boolean(dept?.name))
+
+  const unique = new Map<string, DepartmentOption>()
+  normalized.forEach((dept) => {
+    const key = dept.name.toLowerCase()
+    if (!unique.has(key)) {
+      unique.set(key, dept)
+    }
+  })
+
+  return Array.from(unique.values()).sort((a, b) => a.name.localeCompare(b.name))
+}
+
+const NO_DEPARTMENT_VALUE = '__none__'
+
+const mergeDepartmentOptions = (base: DepartmentOption[], extras: (string | null | undefined)[]) => {
+  const extraOptions = extras
+    .map((name) => (name ? { name, isLegacy: true } as DepartmentOption : null))
+    .filter((v): v is DepartmentOption => Boolean(v))
+  const combined = [...base, ...extraOptions]
+  const unique = new Map<string, DepartmentOption>()
+  combined.forEach((dept) => {
+    const key = dept.name.toLowerCase()
+    if (!unique.has(key)) {
+      unique.set(key, dept)
+    }
+  })
+  return Array.from(unique.values()).sort((a, b) => a.name.localeCompare(b.name))
+}
+
 const TEAM_MEMBERS_CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 interface TeamMembersCacheEntry {
   data: TeamMember[]
@@ -107,7 +160,16 @@ export default function TeamPage() {
   const router = useRouter()
   const [allTeamMembers, setAllTeamMembers] = useState<TeamMember[]>(() => lastTeamMembersSnapshot ?? [])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>(() => lastTeamMembersSnapshot ?? [])
-  const [departments, setDepartments] = useState<string[]>([])
+  const [departments, setDepartments] = useState<DepartmentOption[]>([])
+  const [isDepartmentManagerOpen, setIsDepartmentManagerOpen] = useState(false)
+  const [newDepartmentName, setNewDepartmentName] = useState('')
+  const [departmentActionError, setDepartmentActionError] = useState<string | null>(null)
+  const [isSavingDepartment, setIsSavingDepartment] = useState(false)
+  const [deletingDepartmentId, setDeletingDepartmentId] = useState<string | null>(null)
+  const [departmentUpdateLoading, setDepartmentUpdateLoading] = useState<Record<string, boolean>>({})
+  const [editingDepartmentId, setEditingDepartmentId] = useState<string | null>(null)
+  const [editingDepartmentName, setEditingDepartmentName] = useState<string>('')
+  const [savingDepartmentEdit, setSavingDepartmentEdit] = useState(false)
   const [searchLoading, setSearchLoading] = useState(false)
   const [userRole, setUserRole] = useState<string>('USER')
   const [userDepartment, setUserDepartment] = useState<string>('')
@@ -144,6 +206,7 @@ export default function TeamPage() {
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null)
   const [isSavingMember, setIsSavingMember] = useState(false)
   const [memberFormError, setMemberFormError] = useState<string | null>(null)
+  const [memberDepartmentSelection, setMemberDepartmentSelection] = useState<Record<string, string>>({})
   
   // Debounce timer refs
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
@@ -301,12 +364,181 @@ export default function TeamPage() {
 
   const fetchDepartments = useCallback(async () => {
     try {
-      const data = await apiClient.getDepartments() as string[]
-      setDepartments(data)
-    } catch (error) {
+      const data = await apiClient.getDepartments()
+      const mapped = mapDepartmentsResponse(data as DepartmentDto[] | string[])
+      const includeUserDept =
+        userDepartment &&
+        !mapped.some((dept) => dept.name.toLowerCase() === userDepartment.toLowerCase())
+          ? [...mapped, { name: userDepartment, isLegacy: true }]
+          : mapped
+      setDepartments(includeUserDept.sort((a, b) => a.name.localeCompare(b.name)))
+    } catch (error: any) {
       console.error('Failed to fetch departments:', error)
+      // Don't show alert for department fetch errors, just log them
+      // The UI will work with empty departments list or cached data
+      // If it's a critical error, it will be shown in the console
     }
+  }, [userDepartment])
+
+  // Keep department list in sync with member departments so dropdown always includes their current dept
+  useEffect(() => {
+    if (departments.length === 0 && teamMembers.length === 0) return
+    const memberDepartments = teamMembers.map((m) => m.department || null)
+    setDepartments((prev) => mergeDepartmentOptions(prev, memberDepartments))
+  }, [teamMembers, departments.length])
+
+  // Pre-select department dropdowns for members once data is loaded
+  useEffect(() => {
+    if (!teamMembers || teamMembers.length === 0) return
+    setMemberDepartmentSelection((prev) => {
+      const next = { ...prev }
+      teamMembers.forEach((member) => {
+        if (next[member.id] === undefined) {
+          next[member.id] = member.department || NO_DEPARTMENT_VALUE
+        }
+      })
+      return next
+    })
+  }, [teamMembers])
+
+  const handleAddDepartment = useCallback(async () => {
+    if (!isSuperAdmin) {
+      alert('Only super admins can manage departments.')
+      return
+    }
+    const name = newDepartmentName.trim()
+    if (!name) {
+      setDepartmentActionError('Department name is required.')
+      return
+    }
+    setDepartmentActionError(null)
+    setIsSavingDepartment(true)
+    try {
+      await apiClient.createDepartment(name)
+      setNewDepartmentName('')
+      await fetchDepartments()
+    } catch (error: any) {
+      console.error('Failed to create department:', error)
+      setDepartmentActionError(error.message || 'Failed to create department')
+    } finally {
+      setIsSavingDepartment(false)
+    }
+  }, [isSuperAdmin, newDepartmentName, fetchDepartments])
+
+  const handleDeleteDepartment = useCallback(async (dept: DepartmentOption) => {
+    if (!isSuperAdmin) {
+      alert('Only super admins can manage departments.')
+      return
+    }
+    if (!dept.id) {
+      setDepartmentActionError('Cannot delete legacy department without id.')
+      return
+    }
+    
+    // Check actual member counts from teamMembers
+    const members = teamMembers.filter(m => 
+      (m.department || '').trim().toLowerCase() === dept.name.trim().toLowerCase()
+    )
+    const actualUserCount = members.length || dept.userCount || 0
+    const actualProjectCount = dept.projectCount || 0
+    
+    if (actualUserCount > 0 || actualProjectCount > 0) {
+      setDepartmentActionError(`Cannot delete department. It has ${actualUserCount} user(s) and ${actualProjectCount} project(s). Please reassign them first.`)
+      return
+    }
+    
+    // Confirm deletion
+    if (!window.confirm(`Are you sure you want to delete "${dept.name}"? This action cannot be undone.`)) {
+      return
+    }
+    
+    setDepartmentActionError(null)
+    setDeletingDepartmentId(dept.id)
+    try {
+      await apiClient.deleteDepartment(dept.id)
+      await fetchDepartments()
+      await fetchTeamMembers({ force: true })
+      alert(`Department "${dept.name}" deleted successfully.`)
+    } catch (error: any) {
+      console.error('Failed to delete department:', error)
+      setDepartmentActionError(error.message || 'Failed to delete department')
+    } finally {
+      setDeletingDepartmentId(null)
+    }
+  }, [isSuperAdmin, fetchDepartments, fetchTeamMembers, teamMembers])
+
+  const handleStartEditDepartment = useCallback((dept: DepartmentOption) => {
+    if (!dept.id) {
+      setDepartmentActionError('Cannot edit legacy department without an id. Create a new department instead.')
+      return
+    }
+    setEditingDepartmentId(dept.id)
+    setEditingDepartmentName(dept.name)
+    setDepartmentActionError(null)
   }, [])
+
+  const handleCancelEditDepartment = useCallback(() => {
+    setEditingDepartmentId(null)
+    setEditingDepartmentName('')
+    setSavingDepartmentEdit(false)
+  }, [])
+
+  const handleSaveEditDepartment = useCallback(async () => {
+    if (!editingDepartmentId) return
+    if (!editingDepartmentName.trim()) {
+      setDepartmentActionError('Department name cannot be empty.')
+      return
+    }
+    setSavingDepartmentEdit(true)
+    setDepartmentActionError(null)
+    try {
+      const result = await apiClient.updateDepartment(editingDepartmentId, editingDepartmentName.trim())
+      setEditingDepartmentId(null)
+      setEditingDepartmentName('')
+      // Refresh departments and team members to show updated department names
+      await Promise.all([
+        fetchDepartments(),
+        fetchTeamMembers({ force: true })
+      ])
+      // Show success message if users/projects were updated
+      if (result?.usersUpdated || result?.projectsUpdated) {
+        const message = `Department updated successfully. ${result.usersUpdated || 0} user(s) and ${result.projectsUpdated || 0} project(s) updated.`
+        alert(message)
+      }
+    } catch (error: any) {
+      console.error('Failed to update department:', error)
+      setDepartmentActionError(error.message || 'Failed to update department')
+    } finally {
+      setSavingDepartmentEdit(false)
+    }
+  }, [editingDepartmentId, editingDepartmentName, fetchDepartments, fetchTeamMembers])
+
+  const handleMemberDepartmentChange = useCallback(async (userId: string, departmentName: string) => {
+    const normalized = departmentName === NO_DEPARTMENT_VALUE ? '' : departmentName
+    setMemberDepartmentSelection(prev => ({ ...prev, [userId]: departmentName }))
+    setDepartmentUpdateLoading(prev => ({ ...prev, [userId]: true }))
+    try {
+      await apiClient.updateMemberDepartment(userId, normalized || null)
+      // Update local state immediately for better UX
+      setTeamMembers(prev => prev.map(m => 
+        m.id === userId ? { ...m, department: normalized || undefined } : m
+      ))
+      await fetchTeamMembers({ force: true })
+      await fetchDepartments()
+    } catch (error: any) {
+      console.error('Failed to update member department:', error)
+      // Revert selection on error
+      const member = teamMembers.find(m => m.id === userId)
+      setMemberDepartmentSelection(prev => ({ 
+        ...prev, 
+        [userId]: member?.department || NO_DEPARTMENT_VALUE 
+      }))
+      const errorMsg = error?.error || error?.message || 'Failed to update department. Please try again.'
+      alert(errorMsg)
+    } finally {
+      setDepartmentUpdateLoading(prev => ({ ...prev, [userId]: false }))
+    }
+  }, [fetchTeamMembers, fetchDepartments, teamMembers])
 
   // Client-side filtering for instant updates (before API call completes)
   const filteredTeamMembers = useMemo(() => {
@@ -336,13 +568,46 @@ export default function TeamPage() {
 
   // Use filtered members for display (instant client-side filtering)
   const displayMembers = useMemo(() => {
-    // If search is active, use server-filtered results
-    if (searchQuery.trim()) {
-      return teamMembers
+    let members = searchQuery.trim() ? teamMembers : filteredTeamMembers
+    
+    // Apply additional client-side filtering to ensure search + department filter work together
+    if (searchQuery.trim() && selectedDepartment !== 'all') {
+      const normalizedFilter = selectedDepartment.trim().toLowerCase()
+      members = members.filter(member => {
+        const memberDept = member.department?.trim().toLowerCase() || ''
+        return memberDept === normalizedFilter
+      })
     }
-    // Otherwise use client-side filtered results for instant updates
-    return filteredTeamMembers
-  }, [filteredTeamMembers, teamMembers, searchQuery])
+    
+    return members
+  }, [filteredTeamMembers, teamMembers, searchQuery, selectedDepartment])
+
+  // Departments that have at least one member (for the filter dropdown)
+  const departmentsWithMembers = useMemo(() => {
+    const counts: Record<string, number> = {}
+    teamMembers.forEach((m) => {
+      const key = (m.department || '').trim().toLowerCase()
+      if (!key) return
+      counts[key] = (counts[key] || 0) + 1
+    })
+    return departments
+      .filter((d) => {
+        const key = d.name.trim().toLowerCase()
+        const memberCount = counts[key] || d.userCount || 0
+        return memberCount > 0
+      })
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [departments, teamMembers])
+
+  const departmentMembersMap = useMemo(() => {
+    const map: Record<string, TeamMember[]> = {}
+    teamMembers.forEach((member) => {
+      const key = (member.department || '').trim().toLowerCase()
+      if (!map[key]) map[key] = []
+      map[key].push(member)
+    })
+    return map
+  }, [teamMembers])
 
 
   const applyDepartmentMembersForLeave = useCallback((members: TeamMember[]) => {
@@ -813,18 +1078,32 @@ export default function TeamPage() {
                       <SelectTrigger id="department">
                         <SelectValue placeholder="All Departments" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="max-h-[300px]">
                         {isSuperAdmin && (
                           <SelectItem value="all">All Departments</SelectItem>
                         )}
-                        {departments.map((dept) => (
-                          <SelectItem key={dept} value={dept}>
-                            {dept}
-                            {!isSuperAdmin && dept === userDepartment && ' (Your Department)'}
+                        {departmentsWithMembers.map((dept) => (
+                          <SelectItem key={dept.name} value={dept.name}>
+                            {dept.name}
+                            {!isSuperAdmin && dept.name === userDepartment && ' (Your Department)'}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+                    {isSuperAdmin && (
+                      <div className="flex justify-end mt-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setIsDepartmentManagerOpen(true)}
+                          className="gap-1"
+                        >
+                          <Settings className="h-4 w-4" />
+                          Manage
+                        </Button>
+                      </div>
+                    )}
                     {!isSuperAdmin && (
                       <p className="text-xs text-muted-foreground mt-1">
                         Showing employees from your department: {userDepartment}
@@ -900,7 +1179,33 @@ export default function TeamPage() {
                                 </div>
                               </td>
                               <td className="p-4">
-                                {member.department ? (
+                                {isAdmin ? (
+                                  <div className="flex items-center gap-2">
+                                    <Select
+                                      value={memberDepartmentSelection[member.id] ?? member.department ?? NO_DEPARTMENT_VALUE}
+                                      onValueChange={(value) =>
+                                        handleMemberDepartmentChange(
+                                          member.id,
+                                          value === NO_DEPARTMENT_VALUE ? '' : value
+                                        )
+                                      }
+                                      disabled={departmentUpdateLoading[member.id]}
+                                    >
+                                      <SelectTrigger className="w-44">
+                                        <SelectValue placeholder="Select department" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value={NO_DEPARTMENT_VALUE}>No Department</SelectItem>
+                                        {departments.map((dept) => (
+                                          <SelectItem key={`${dept.name}-${dept.id ?? 'legacy'}`} value={dept.name}>
+                                            {dept.name}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    {departmentUpdateLoading[member.id] && <Loader2 className="h-4 w-4 animate-spin" />}
+                                  </div>
+                                ) : member.department ? (
                                   <Badge variant="outline">{member.department}</Badge>
                                 ) : (
                                   <span className="text-muted-foreground">-</span>
@@ -1464,12 +1769,26 @@ export default function TeamPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="memberDepartment">Department</Label>
-                    <Input
-                      id="memberDepartment"
-                      value={memberFormData.department}
-                      onChange={(e) => setMemberFormData(prev => ({ ...prev, department: e.target.value }))}
-                      placeholder="Department name"
-                    />
+                    <Select
+                      value={memberFormData.department || NO_DEPARTMENT_VALUE}
+                      onValueChange={(value) =>
+                        setMemberFormData(prev => ({ ...prev, department: value === NO_DEPARTMENT_VALUE ? '' : value }))
+                      }
+                    >
+                      <SelectTrigger id="memberDepartment">
+                        <SelectValue placeholder="Select department" />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-[300px]">
+                        <SelectItem value={NO_DEPARTMENT_VALUE}>No Department</SelectItem>
+                        {Array.from(new Map(departments.map(dept => [dept.name.toLowerCase(), dept])).values())
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .map((dept) => (
+                            <SelectItem key={`${dept.name}-${dept.id ?? 'legacy'}`} value={dept.name}>
+                              {dept.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
                     <Label htmlFor="memberCompany">Company</Label>
@@ -1542,6 +1861,140 @@ export default function TeamPage() {
                     {isSavingMember && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                     {memberFormMode === 'create' ? 'Add Member' : 'Save Changes'}
                   </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
+        {isSuperAdmin && (
+          <Dialog open={isDepartmentManagerOpen} onOpenChange={setIsDepartmentManagerOpen}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Departments</DialogTitle>
+                <DialogDescription>View, add, or delete departments.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                {departmentActionError && (
+                  <div className="rounded-md bg-destructive/10 border border-destructive px-3 py-2 text-sm text-destructive">
+                    {departmentActionError}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="New department name"
+                    value={newDepartmentName}
+                    onChange={(e) => setNewDepartmentName(e.target.value)}
+                    disabled={isSavingDepartment}
+                  />
+                  <Button onClick={handleAddDepartment} disabled={isSavingDepartment}>
+                    {isSavingDepartment && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Add
+                  </Button>
+                </div>
+                <div className="border rounded-md max-h-64 overflow-auto">
+                  {departments.length === 0 ? (
+                    <p className="p-3 text-sm text-muted-foreground">No departments yet.</p>
+                  ) : (
+                    <ul className="divide-y">
+                      {Array.from(new Map(departments.map(dept => [dept.name.toLowerCase(), dept])).values())
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((dept) => {
+                        const members = departmentMembersMap[dept.name.toLowerCase()] || []
+                        const sampleMembers = members.slice(0, 4)
+                        const hasMore = members.length > sampleMembers.length
+                        const isEditing = editingDepartmentId === dept.id
+                        const actualUserCount = members.length || dept.userCount || 0
+                        const actualProjectCount = dept.projectCount || 0
+                        const canDelete = dept.id && actualUserCount === 0 && actualProjectCount === 0
+                        return (
+                          <li key={`${dept.name}-${dept.id ?? 'legacy'}`} className="p-3 space-y-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="space-y-0.5">
+                                {isEditing ? (
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      value={editingDepartmentName}
+                                      onChange={(e) => setEditingDepartmentName(e.target.value)}
+                                      className="h-8"
+                                      autoFocus
+                                    />
+                                    <Button size="sm" onClick={handleSaveEditDepartment} disabled={savingDepartmentEdit}>
+                                      {savingDepartmentEdit && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                                      Save
+                                    </Button>
+                                    <Button size="sm" variant="ghost" onClick={handleCancelEditDepartment} disabled={savingDepartmentEdit}>
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <p className="font-medium">{dept.name}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Users: {actualUserCount} · Projects: {actualProjectCount}
+                                      {dept.isLegacy && ' · legacy'}
+                                    </p>
+                                  </>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {!dept.id && (
+                                  <Badge variant="outline" className="text-xs">Legacy</Badge>
+                                )}
+                                {dept.id && !isEditing && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleStartEditDepartment(dept)}
+                                    title="Edit department name"
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-destructive"
+                                  disabled={!canDelete || deletingDepartmentId === dept.id}
+                                  onClick={() => handleDeleteDepartment(dept)}
+                                  title={
+                                    !dept.id
+                                      ? 'Cannot delete legacy department'
+                                      : !canDelete
+                                        ? `Cannot delete: ${actualUserCount} user(s), ${actualProjectCount} project(s)`
+                                        : 'Delete department'
+                                  }
+                                >
+                                  {deletingDepartmentId === dept.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                            <div className="bg-muted/40 rounded-md p-2">
+                              {members.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">No users in this department yet.</p>
+                              ) : (
+                                <div className="flex flex-wrap gap-2">
+                                  {sampleMembers.map((m) => (
+                                    <Badge key={m.id} variant="outline" className="text-xs">
+                                      {m.name || m.email}
+                                    </Badge>
+                                  ))}
+                                  {hasMore && (
+                                    <Badge variant="secondary" className="text-xs">
+                                      +{members.length - sampleMembers.length} more
+                                    </Badge>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
                 </div>
               </div>
             </DialogContent>
