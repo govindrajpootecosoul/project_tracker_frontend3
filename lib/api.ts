@@ -7,7 +7,7 @@ export interface DepartmentDto {
   projectCount?: number
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 const CACHE_PREFIX = 'api_cache_'
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
@@ -549,6 +549,26 @@ class ApiClient {
   // Email
   async sendEmail(data: any) {
     return this.request('/email/send', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  // Auto Email Config
+  async getAutoEmailConfig() {
+    return this.request('/email/admin/auto-email-config')
+  }
+
+  async updateAutoEmailConfig(data: {
+    enabled?: boolean
+    toEmails?: string[]
+    departments?: string[]
+    daysOfWeek?: number[]
+    timeOfDay?: string
+    timezone?: string
+    sendWhenEmpty?: boolean
+  }) {
+    return this.request('/email/admin/auto-email-config', {
       method: 'POST',
       body: JSON.stringify(data),
     })

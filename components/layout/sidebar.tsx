@@ -11,6 +11,7 @@ import {
   X,
   Key,
   CreditCard,
+  Settings,
 } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
@@ -28,12 +29,13 @@ import {
 import { Label } from '@/components/ui/label'
 
 const menuItems = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, requirePermission: null },
-  { name: 'My Tasks', href: '/tasks', icon: CheckSquare, requirePermission: null },
-  { name: 'Projects', href: '/projects', icon: FolderKanban, requirePermission: null },
-  { name: 'Team Management', href: '/team', icon: Users, requirePermission: null },
-  { name: 'Credential Manager', href: '/credentials', icon: Key, requirePermission: 'hasCredentialAccess' },
-  { name: 'My Subscriptions', href: '/subscriptions', icon: CreditCard, requirePermission: 'hasSubscriptionAccess' },
+  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, requirePermission: null, requireSuperAdmin: false },
+  { name: 'My Tasks', href: '/tasks', icon: CheckSquare, requirePermission: null, requireSuperAdmin: false },
+  { name: 'Projects', href: '/projects', icon: FolderKanban, requirePermission: null, requireSuperAdmin: false },
+  { name: 'Team Management', href: '/team', icon: Users, requirePermission: null, requireSuperAdmin: false },
+  { name: 'Credential Manager', href: '/credentials', icon: Key, requirePermission: 'hasCredentialAccess', requireSuperAdmin: false },
+  { name: 'My Subscriptions', href: '/subscriptions', icon: CreditCard, requirePermission: 'hasSubscriptionAccess', requireSuperAdmin: false },
+  { name: 'Manage Auto Send Mail', href: '/admin/auto-email', icon: Settings, requirePermission: null, requireSuperAdmin: true },
 ]
 
 export function Sidebar() {
@@ -99,7 +101,7 @@ export function Sidebar() {
 
   const fetchThoughts = async () => {
     try {
-      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'
+      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
       const res = await fetch(`${base}/thoughts`)
       const data = await res.json()
       const list = Array.isArray(data.thoughts) ? data.thoughts : []
@@ -172,7 +174,7 @@ export function Sidebar() {
 
     setIsSavingThought(true)
     try {
-      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'
+      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
       const token = getToken()
       
       if (!token) {
@@ -224,7 +226,7 @@ export function Sidebar() {
 
   const handleSelectThought = async (thoughtId: string) => {
     try {
-      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'
+      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
       const token = getToken()
       
       if (!token) {
@@ -275,6 +277,11 @@ export function Sidebar() {
   // Filter menu items based on permissions
   // Check permissions for all users, including admins
   const visibleMenuItems = menuItems.filter(item => {
+    // Check super admin requirement
+    if (item.requireSuperAdmin && !isSuperAdmin) {
+      return false
+    }
+    
     // Always show items that don't require permissions
     if (!item.requirePermission) return true
     
