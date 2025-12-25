@@ -582,9 +582,10 @@ export default function TasksPage() {
         return Math.round(num)
       }
 
+      // Note: Titles and descriptions can contain commas - backend will split them
       const cleanData: any = {
-        title: formData.title.trim(),
-        description: formData.description?.trim() || null,
+        title: formData.title.trim(), // Can contain multiple titles separated by commas
+        description: formData.description?.trim() || null, // Can contain multiple descriptions separated by commas
         status: formData.status,
         priority: formData.priority,
         startDate: formData.startDate && formData.startDate.trim() !== '' ? formData.startDate : null,
@@ -606,7 +607,17 @@ export default function TasksPage() {
         cleanData.assignees = [formData.assigneeId.trim()]
       }
 
-      await apiClient.createTask(cleanData)
+      const result = await apiClient.createTask(cleanData)
+      
+      // Handle response - could be single task or multiple tasks
+      if (result.tasks && Array.isArray(result.tasks)) {
+        // Multiple tasks created
+        alert(`Successfully created ${result.count || result.tasks.length} task(s)!`)
+      } else if (result.id) {
+        // Single task created (backward compatibility)
+        alert('Task created successfully!')
+      }
+      
       closeDialog()
       await Promise.all([fetchTasks(), fetchProjects()])
       // Refresh notifications immediately
@@ -1701,7 +1712,9 @@ export default function TasksPage() {
             <DialogHeader>
               <DialogTitle>{editingTask ? 'Edit Task' : 'Create New Task'}</DialogTitle>
               <DialogDescription>
-                {editingTask ? 'Update the task details below.' : 'Fill in the details to create a new task.'}
+                {editingTask 
+                  ? 'Update the task details below.' 
+                  : 'Fill in the details to create a new task. You can create multiple tasks by separating titles with commas.'}
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleFormSubmit} className="space-y-4">
@@ -1712,9 +1725,14 @@ export default function TasksPage() {
                   name="title"
                   value={formData.title}
                   onChange={(e) => updateFormField('title', e.target.value)}
-                  placeholder="Task title"
+                  placeholder="Task title, or multiple titles separated by commas (e.g., task1, task2, task3)"
                   required
                 />
+                {!editingTask && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Enter multiple titles separated by commas to create multiple tasks at once
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1725,8 +1743,13 @@ export default function TasksPage() {
                   className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                   value={formData.description}
                   onChange={(e) => updateFormField('description', e.target.value)}
-                  placeholder="Task description"
+                  placeholder="Task description, or multiple descriptions separated by commas"
                 />
+                {!editingTask && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Optional: Enter descriptions separated by commas. First description maps to first task, second to second, etc.
+                  </p>
+                )}
               </div>
 
               {shouldShowMediaFields && (

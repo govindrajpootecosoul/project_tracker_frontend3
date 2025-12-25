@@ -179,6 +179,19 @@ model ActivityLog {
   @@map("activity_logs")
 }
 
+model Thought {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  content     String
+  order       Int
+  updatedById String?  @db.ObjectId
+  updatedBy   User?    @relation(fields: [updatedById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([order])
+  @@map("thoughts")
+}
+
 enum ActivityType {
   TASK_CREATED
   TASK_UPDATED
