@@ -100,12 +100,21 @@ export default function DashboardPage() {
     try {
       const [statsData, projectsData, teamMembersData] = await Promise.all([
         apiClient.getTaskStats(currentView),
-        apiClient.getProjects(),
-        apiClient.getTeamMembers(),
+        apiClient.getProjects({ limit: 100, skip: 0 }), // Get more projects for dashboard
+        apiClient.getTeamMembers({ limit: 100, skip: 0 }), // Get more members for dashboard
       ])
       setStats(statsData as typeof stats)
-      setProjects(projectsData as Project[])
-      setTeamMembers(teamMembersData as TeamMember[])
+      
+      // Handle new paginated response format
+      const projects = Array.isArray(projectsData) 
+        ? projectsData 
+        : (projectsData as any)?.projects || []
+      const teamMembers = Array.isArray(teamMembersData)
+        ? teamMembersData
+        : (teamMembersData as any)?.members || []
+      
+      setProjects(projects as Project[])
+      setTeamMembers(teamMembers as TeamMember[])
       
       // Fetch activities separately to avoid breaking the dashboard if it fails
       try {
@@ -122,16 +131,21 @@ export default function DashboardPage() {
 
       // Fetch in-progress tasks based on current view
       try {
-        let tasksData: any[] = []
+        let tasksResult: any
         if (currentView === 'my') {
-          tasksData = await apiClient.getMyTasks()
+          tasksResult = await apiClient.getMyTasks({ limit: 100, skip: 0 })
         } else if (currentView === 'department') {
-          tasksData = await apiClient.getDepartmentTasks()
+          tasksResult = await apiClient.getDepartmentTasks({ limit: 100, skip: 0 })
         } else if (currentView === 'all-departments') {
-          tasksData = await apiClient.getAllDepartmentsTasks()
+          tasksResult = await apiClient.getAllDepartmentsTasks({ limit: 100, skip: 0 })
         } else {
-          tasksData = await apiClient.getMyTasks()
+          tasksResult = await apiClient.getMyTasks({ limit: 100, skip: 0 })
         }
+        
+        // Handle new paginated response format
+        const tasksData = Array.isArray(tasksResult)
+          ? tasksResult
+          : (tasksResult as any)?.tasks || []
         
         // Filter only IN_PROGRESS tasks
         const inProgress = tasksData.filter((task: any) => {
@@ -261,7 +275,7 @@ export default function DashboardPage() {
   ]
 
   // Calculate percentages for projects
-  const tasksByProjectData = projects
+  const tasksByProjectData = (Array.isArray(projects) ? projects : [])
     .map((project, index) => ({
       id: project.id,
       name: project.name,

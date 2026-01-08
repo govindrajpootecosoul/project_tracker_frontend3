@@ -14,10 +14,11 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { motion } from 'framer-motion'
-import { Plus, Edit, Trash2, MessageSquare, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, Users, X, Loader2, MoreVertical } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Plus, Edit, Trash2, MessageSquare, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, Users, X, Loader2, MoreVertical, Minus } from 'lucide-react'
 import { format } from 'date-fns'
 import type { TaskComment } from '@/types/comments'
+import { TaskListSkeleton, TaskTableSkeleton } from '@/components/skeletons/task-skeleton'
 
 type TaskStatus = 'IN_PROGRESS' | 'COMPLETED' | 'YTS' | 'ON_HOLD' | 'RECURRING'
 type TaskPriority = 'HIGH' | 'MEDIUM' | 'LOW'
@@ -57,6 +58,7 @@ interface Task {
   reviewerId?: string
   reviewedById?: string
   reviewedAt?: string
+  statusUpdatedAt?: string
   createdById: string
   assignees: { user: { id: string; name?: string; email: string } }[]
   reviewRequestedBy?: { id: string; name?: string; email: string } | null
@@ -133,6 +135,14 @@ export default function TasksPage() {
   const [reviewTasks, setReviewTasks] = useState<Task[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [brands, setBrands] = useState<string[]>([])
+  const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false)
+  const [projectFormData, setProjectFormData] = useState({
+    name: '',
+    description: '',
+    brand: '',
+    company: '',
+    status: 'ACTIVE',
+  })
   const [teamMembers, setTeamMembers] = useState<TeamMemberInfo[]>([])
   const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState<TaskStatus | 'all'>('all')
   const [teamMemberFilter, setTeamMemberFilter] = useState<string>('all')
@@ -169,6 +179,34 @@ export default function TasksPage() {
   const [departments, setDepartments] = useState<string[]>([])
   const [otherDepartmentTasks, setOtherDepartmentTasks] = useState<Task[]>([])
   const [isLoadingOtherDept, setIsLoadingOtherDept] = useState(false)
+  const [taskFields, setTaskFields] = useState<Array<{ title: string; description: string }>>([{ title: '', description: '' }])
+  
+  // Pagination state
+  const [myTasksSkip, setMyTasksSkip] = useState(0)
+  const [myTasksHasMore, setMyTasksHasMore] = useState(true)
+  const [isLoadingMyTasks, setIsLoadingMyTasks] = useState(false)
+  const [isInitialLoadingMyTasks, setIsInitialLoadingMyTasks] = useState(true)
+  
+  const [teamTasksSkip, setTeamTasksSkip] = useState(0)
+  const [teamTasksHasMore, setTeamTasksHasMore] = useState(true)
+  const [isLoadingTeamTasks, setIsLoadingTeamTasks] = useState(false)
+  const [isInitialLoadingTeamTasks, setIsInitialLoadingTeamTasks] = useState(true)
+  
+  const [reviewTasksSkip, setReviewTasksSkip] = useState(0)
+  const [reviewTasksHasMore, setReviewTasksHasMore] = useState(true)
+  const [isLoadingReviewTasks, setIsLoadingReviewTasks] = useState(false)
+  const [isInitialLoadingReviewTasks, setIsInitialLoadingReviewTasks] = useState(true)
+  
+  const [isInitialLoadingOtherDept, setIsInitialLoadingOtherDept] = useState(true)
+  
+  const [otherDeptTasksSkip, setOtherDeptTasksSkip] = useState(0)
+  const [otherDeptTasksHasMore, setOtherDeptTasksHasMore] = useState(true)
+  
+  // Refs for infinite scroll
+  const myTasksScrollRef = useRef<HTMLDivElement>(null)
+  const teamTasksScrollRef = useRef<HTMLDivElement>(null)
+  const reviewTasksScrollRef = useRef<HTMLDivElement>(null)
+  const otherDeptTasksScrollRef = useRef<HTMLDivElement>(null)
   
   const clearProjectFilter = useCallback(() => {
     router.push('/tasks')
@@ -204,7 +242,8 @@ export default function TasksPage() {
 
   const selectedProjectDepartment = useMemo(() => {
     if (!formData.projectId) return null
-    const project = projects.find(project => project.id === formData.projectId)
+    const projectsArray = Array.isArray(projects) ? projects : []
+    const project = projectsArray.find(project => project.id === formData.projectId)
     return project?.department || null
   }, [formData.projectId, projects])
 
@@ -288,53 +327,162 @@ export default function TasksPage() {
     }
   }, [activeTab, showOtherDeptTab])
 
-  const fetchTasks = useCallback(async () => {
+  const fetchTasks = useCallback(async (loadMore: boolean = false) => {
     try {
-      const [myTasks, teamTasksData, reviewTasksData] = await Promise.all([
-        apiClient.getMyTasks(),
-        apiClient.getTeamTasks(),
-        apiClient.getReviewTasks(),
-      ])
-      setTasks(myTasks as Task[])
-      setTeamTasks(teamTasksData as Task[])
-      setReviewTasks(reviewTasksData as Task[])
+      const skip = loadMore ? myTasksSkip : 0
+      if (!loadMore) {
+        setIsInitialLoadingMyTasks(true)
+      }
+      setIsLoadingMyTasks(true)
+      const limit = loadMore ? 50 : 200 // Load more initially (200) to show all statuses, then 50 per scroll
+      const result = await apiClient.getMyTasks({ limit, skip })
+      const data = result.tasks || result // Handle both new and old format
+      const tasksArray = Array.isArray(data) ? data : []
+      
+      if (loadMore) {
+        // Deduplicate tasks by id to prevent blinking
+        setTasks(prev => {
+          const existingIds = new Set(prev.map(t => t.id))
+          const newTasks = tasksArray.filter(t => !existingIds.has(t.id))
+          return [...prev, ...newTasks]
+        })
+        setMyTasksSkip(prev => prev + tasksArray.length)
+      } else {
+        setTasks(tasksArray)
+        setMyTasksSkip(tasksArray.length)
+      }
+      setMyTasksHasMore(result.hasMore !== false && tasksArray.length === limit)
+    } catch (error) {
+      console.error('Failed to fetch my tasks:', error)
+    } finally {
+      setIsLoadingMyTasks(false)
+      setIsInitialLoadingMyTasks(false)
+    }
+  }, [myTasksSkip])
+
+  const fetchTeamTasks = useCallback(async (loadMore: boolean = false) => {
+    try {
+      const skip = loadMore ? teamTasksSkip : 0
+      if (!loadMore) {
+        setIsInitialLoadingTeamTasks(true)
+      }
+      setIsLoadingTeamTasks(true)
+      const limit = loadMore ? 50 : 200 // Load more initially (200) to show all statuses, then 50 per scroll
+      const result = await apiClient.getTeamTasks({ limit, skip })
+      const data = result.tasks || result // Handle both new and old format
+      const tasksArray = Array.isArray(data) ? data : []
+      
+      if (loadMore) {
+        // Deduplicate tasks by id to prevent blinking
+        setTeamTasks(prev => {
+          const existingIds = new Set(prev.map(t => t.id))
+          const newTasks = tasksArray.filter(t => !existingIds.has(t.id))
+          return [...prev, ...newTasks]
+        })
+        setTeamTasksSkip(prev => prev + tasksArray.length)
+      } else {
+        setTeamTasks(tasksArray)
+        setTeamTasksSkip(tasksArray.length)
+      }
+      setTeamTasksHasMore(result.hasMore !== false && tasksArray.length === limit)
+    } catch (error) {
+      console.error('Failed to fetch team tasks:', error)
+    } finally {
+      setIsLoadingTeamTasks(false)
+      setIsInitialLoadingTeamTasks(false)
+    }
+  }, [teamTasksSkip])
+
+  const fetchReviewTasks = useCallback(async (loadMore: boolean = false) => {
+    try {
+      const skip = loadMore ? reviewTasksSkip : 0
+      if (!loadMore) {
+        setIsInitialLoadingReviewTasks(true)
+      }
+      setIsLoadingReviewTasks(true)
+      const limit = loadMore ? 50 : 200 // Load more initially (200) to show all statuses, then 50 per scroll
+      const result = await apiClient.getReviewTasks({ limit, skip })
+      const data = result.tasks || result // Handle both new and old format
+      const tasksArray = Array.isArray(data) ? data : []
+      
+      if (loadMore) {
+        // Deduplicate tasks by id to prevent blinking
+        setReviewTasks(prev => {
+          const existingIds = new Set(prev.map(t => t.id))
+          const newTasks = tasksArray.filter(t => !existingIds.has(t.id))
+          return [...prev, ...newTasks]
+        })
+        setReviewTasksSkip(prev => prev + tasksArray.length)
+      } else {
+        setReviewTasks(tasksArray)
+        setReviewTasksSkip(tasksArray.length)
+      }
+      setReviewTasksHasMore(result.hasMore !== false && tasksArray.length === limit)
       console.log('Fetched Review Tasks:', {
-        count: (reviewTasksData as Task[]).length,
-        tasks: (reviewTasksData as Task[]).map(t => ({
+        count: tasksArray.length,
+        hasMore: result.hasMore,
+        tasks: tasksArray.map(t => ({
           id: t.id,
           title: t.title,
           reviewStatus: t.reviewStatus,
-          reviewerId: t.reviewerId,
+          reviewerId: t.reviewId,
         })),
       })
     } catch (error) {
-      console.error('Failed to fetch tasks:', error)
+      console.error('Failed to fetch review tasks:', error)
+    } finally {
+      setIsLoadingReviewTasks(false)
+      setIsInitialLoadingReviewTasks(false)
     }
-  }, [])
+  }, [reviewTasksSkip])
 
-  const fetchOtherDepartmentTasks = useCallback(async () => {
+  const fetchOtherDepartmentTasks = useCallback(async (loadMore: boolean = false) => {
     if (!isSuperAdminUser) {
       setOtherDepartmentTasks([])
+      setIsInitialLoadingOtherDept(false)
       return
+    }
+    if (!loadMore) {
+      setIsInitialLoadingOtherDept(true)
     }
     setIsLoadingOtherDept(true)
     try {
-      const allDeptTasks = await apiClient.getAllDepartmentsTasks()
+      const skip = loadMore ? otherDeptTasksSkip : 0
+      const limit = loadMore ? 50 : 200 // Load more initially (200) to show all statuses, then 50 per scroll
+      const result = await apiClient.getAllDepartmentsTasks({ limit, skip })
+      const data = result.tasks || result // Handle both new and old format
+      const tasksArray = Array.isArray(data) ? data : []
       const userDept = user?.department?.trim().toLowerCase()
-      const filtered = (allDeptTasks as Task[]).filter((task) => {
+      const filtered = tasksArray.filter((task) => {
         const projectDept = task.project?.department?.trim().toLowerCase()
         if (!projectDept) return false
         if (!userDept) return true
         return projectDept !== userDept
       })
-      setOtherDepartmentTasks(filtered)
+      
+      if (loadMore) {
+        // Deduplicate tasks by id to prevent blinking
+        setOtherDepartmentTasks(prev => {
+          const existingIds = new Set(prev.map(t => t.id))
+          const newTasks = filtered.filter(t => !existingIds.has(t.id))
+          return [...prev, ...newTasks]
+        })
+        setOtherDeptTasksSkip(prev => prev + filtered.length)
+      } else {
+        setOtherDepartmentTasks(filtered)
+        setOtherDeptTasksSkip(filtered.length)
+      }
+      setOtherDeptTasksHasMore(result.hasMore !== false && filtered.length === limit)
     } catch (error) {
       console.error('Failed to fetch other department tasks:', error)
-      setOtherDepartmentTasks([])
+      if (!loadMore) {
+        setOtherDepartmentTasks([])
+      }
     } finally {
       setIsLoadingOtherDept(false)
+      setIsInitialLoadingOtherDept(false)
     }
-  }, [isSuperAdminUser, user?.department, tasks.length, teamTasks.length])
+  }, [isSuperAdminUser, user?.department, otherDeptTasksSkip])
 
   useEffect(() => {
     fetchOtherDepartmentTasks()
@@ -342,17 +490,64 @@ export default function TasksPage() {
 
   const fetchProjects = useCallback(async () => {
     try {
-      const projectsData = await apiClient.getProjects()
-      setProjects(projectsData as Project[])
+      const projectsData = await apiClient.getProjects({ limit: 1000, skip: 0 }) // Get all projects for dropdown
+      // Handle new paginated response format
+      const projects = Array.isArray(projectsData)
+        ? projectsData
+        : (projectsData as any)?.projects || []
+      setProjects(projects as Project[])
+      
+      // Update brands from projects
+      const brandSet = new Set<string>()
+      projects.forEach((project: Project) => {
+        if (project.brand && project.brand.trim()) {
+          brandSet.add(project.brand.trim())
+        }
+      })
+      setBrands(Array.from(brandSet).sort())
     } catch (error) {
       console.error('Failed to fetch projects:', error)
     }
   }, [])
 
+  const handleCreateProject = useCallback(async () => {
+    try {
+      if (!projectFormData.name.trim()) {
+        alert('Project name is required')
+        return
+      }
+      const newProject = await apiClient.createProject(projectFormData)
+      setIsProjectDialogOpen(false)
+      setProjectFormData({
+        name: '',
+        description: '',
+        brand: '',
+        company: '',
+        status: 'ACTIVE',
+      })
+      // Refresh projects list
+      await fetchProjects()
+      // Select the newly created project in the task form
+      if (newProject && (newProject as any).id) {
+        updateFormField('projectId', (newProject as any).id)
+      } else if (Array.isArray(newProject) && newProject.length > 0) {
+        updateFormField('projectId', newProject[0].id)
+      }
+      alert('Project created successfully!')
+    } catch (error: any) {
+      console.error('Failed to create project:', error)
+      alert(error?.message || 'Failed to create project')
+    }
+  }, [projectFormData, fetchProjects])
+
   const fetchTeamMembers = useCallback(async () => {
     try {
-      const membersData = await apiClient.getTeamMembers()
-      setTeamMembers(membersData as TeamMemberInfo[])
+      const membersData = await apiClient.getTeamMembers({ limit: 1000, skip: 0 }) // Get all members for dropdown
+      // Handle new paginated response format
+      const members = Array.isArray(membersData)
+        ? membersData
+        : (membersData as any)?.members || []
+      setTeamMembers(members as TeamMemberInfo[])
     } catch (error) {
       console.error('Failed to fetch team members:', error)
     }
@@ -420,6 +615,8 @@ export default function TasksPage() {
     hydrateProfile()
 
     fetchTasks()
+    fetchTeamTasks()
+    fetchReviewTasks()
     fetchProjects()
     fetchTeamMembers()
     fetchDepartments()
@@ -428,6 +625,8 @@ export default function TasksPage() {
     // Listen for refresh events from navbar
     const handleRefreshTasks = () => {
       fetchTasks()
+      fetchTeamTasks()
+      fetchReviewTasks()
     }
     window.addEventListener('refreshTasks', handleRefreshTasks)
     
@@ -451,7 +650,155 @@ export default function TasksPage() {
       window.removeEventListener('refreshTasks', handleRefreshTasks)
       window.removeEventListener('switchToReviewTab', handleSwitchToReviewTab)
     }
-  }, [router, fetchTasks, fetchProjects, fetchTeamMembers, fetchAllUsers])
+  }, [router, fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchProjects, fetchTeamMembers, fetchAllUsers])
+
+  // Infinite scroll for My Tasks - only trigger on manual scroll
+  useEffect(() => {
+    if (activeTab !== 'my' || !myTasksHasMore || isLoadingMyTasks) return
+    
+    const sentinel = document.getElementById('my-tasks-sentinel')
+    if (!sentinel) return
+
+    let hasScrolled = false
+    const handleScroll = () => {
+      hasScrolled = true
+    }
+    
+    // Only enable infinite scroll after user has scrolled
+    window.addEventListener('scroll', handleScroll, { once: true })
+    window.addEventListener('wheel', handleScroll, { once: true })
+    window.addEventListener('touchmove', handleScroll, { once: true })
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // Only load more if user has scrolled and sentinel is visible
+        if (entries[0].isIntersecting && !isLoadingMyTasks && hasScrolled) {
+          fetchTasks(true)
+        }
+      },
+      { threshold: 0.1, rootMargin: '50px' } // Reduced margin to only load when actually scrolling
+    )
+
+    observer.observe(sentinel)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('wheel', handleScroll)
+      window.removeEventListener('touchmove', handleScroll)
+    }
+  }, [activeTab, myTasksHasMore, isLoadingMyTasks, fetchTasks])
+
+  // Infinite scroll for Team Tasks - only trigger on manual scroll
+  useEffect(() => {
+    if (activeTab !== 'team' || !teamTasksHasMore || isLoadingTeamTasks) return
+    
+    const sentinel = document.getElementById('team-tasks-sentinel')
+    if (!sentinel) return
+
+    let hasScrolled = false
+    const handleScroll = () => {
+      hasScrolled = true
+    }
+    
+    // Only enable infinite scroll after user has scrolled
+    window.addEventListener('scroll', handleScroll, { once: true })
+    window.addEventListener('wheel', handleScroll, { once: true })
+    window.addEventListener('touchmove', handleScroll, { once: true })
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // Only load more if user has scrolled and sentinel is visible
+        if (entries[0].isIntersecting && !isLoadingTeamTasks && hasScrolled) {
+          fetchTeamTasks(true)
+        }
+      },
+      { threshold: 0.1, rootMargin: '50px' } // Reduced margin to only load when actually scrolling
+    )
+
+    observer.observe(sentinel)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('wheel', handleScroll)
+      window.removeEventListener('touchmove', handleScroll)
+    }
+  }, [activeTab, teamTasksHasMore, isLoadingTeamTasks, fetchTeamTasks])
+
+  // Infinite scroll for Review Tasks - only trigger on manual scroll
+  useEffect(() => {
+    if (activeTab !== 'review' || !reviewTasksHasMore || isLoadingReviewTasks) return
+    
+    const sentinel = document.getElementById('review-tasks-sentinel')
+    if (!sentinel) return
+
+    let hasScrolled = false
+    const handleScroll = () => {
+      hasScrolled = true
+    }
+    
+    // Only enable infinite scroll after user has scrolled
+    window.addEventListener('scroll', handleScroll, { once: true })
+    window.addEventListener('wheel', handleScroll, { once: true })
+    window.addEventListener('touchmove', handleScroll, { once: true })
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // Only load more if user has scrolled and sentinel is visible
+        if (entries[0].isIntersecting && !isLoadingReviewTasks && hasScrolled) {
+          fetchReviewTasks(true)
+        }
+      },
+      { threshold: 0.1, rootMargin: '50px' } // Reduced margin to only load when actually scrolling
+    )
+
+    observer.observe(sentinel)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('wheel', handleScroll)
+      window.removeEventListener('touchmove', handleScroll)
+    }
+  }, [activeTab, reviewTasksHasMore, isLoadingReviewTasks, fetchReviewTasks])
+
+  // Infinite scroll for Other Department Tasks - only trigger on manual scroll
+  useEffect(() => {
+    if (activeTab !== 'otherDept' || !otherDeptTasksHasMore || isLoadingOtherDept) return
+    
+    const sentinel = document.getElementById('other-dept-tasks-sentinel')
+    if (!sentinel) return
+
+    let hasScrolled = false
+    const handleScroll = () => {
+      hasScrolled = true
+    }
+    
+    // Only enable infinite scroll after user has scrolled
+    window.addEventListener('scroll', handleScroll, { once: true })
+    window.addEventListener('wheel', handleScroll, { once: true })
+    window.addEventListener('touchmove', handleScroll, { once: true })
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // Only load more if user has scrolled and sentinel is visible
+        if (entries[0].isIntersecting && !isLoadingOtherDept && hasScrolled) {
+          fetchOtherDepartmentTasks(true)
+        }
+      },
+      { threshold: 0.1, rootMargin: '50px' } // Reduced margin to only load when actually scrolling
+    )
+
+    observer.observe(sentinel)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('wheel', handleScroll)
+      window.removeEventListener('touchmove', handleScroll)
+    }
+  }, [activeTab, otherDeptTasksHasMore, isLoadingOtherDept, fetchOtherDepartmentTasks])
 
   // Extract unique brands from tasks and projects
   useEffect(() => {
@@ -482,6 +829,7 @@ export default function TasksPage() {
   const resetForm = useCallback(() => {
     setFormData(createInitialFormData())
     setEditingTask(null)
+    setTaskFields([{ title: '', description: '' }])
   }, [])
 
   const fetchAssignableMembers = useCallback(async (search?: string) => {
@@ -529,6 +877,7 @@ export default function TasksPage() {
       videoCount: task.videoCount != null ? String(task.videoCount) : '',
       link: task.link || '',
     })
+    setTaskFields([{ title: task.title, description: task.description || '' }])
     setIsDialogOpen(true)
     // Fetch assignable members when opening dialog
     if (user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
@@ -568,8 +917,10 @@ export default function TasksPage() {
   const handleCreateTask = useCallback(async () => {
     if (isSavingTask) return
     try {
-      if (!formData.title.trim()) {
-        alert('Task title is required')
+      // Validate that at least one title is provided
+      const validFields = taskFields.filter(field => field.title.trim().length > 0)
+      if (validFields.length === 0) {
+        alert('At least one task title is required')
         return
       }
 
@@ -582,10 +933,13 @@ export default function TasksPage() {
         return Math.round(num)
       }
 
-      // Note: Titles and descriptions can contain commas - backend will split them
+      // Convert taskFields array to comma-separated strings for backend
+      const titles = validFields.map(field => field.title.trim()).join(',')
+      const descriptions = validFields.map(field => field.description.trim()).join(',')
+
       const cleanData: any = {
-        title: formData.title.trim(), // Can contain multiple titles separated by commas
-        description: formData.description?.trim() || null, // Can contain multiple descriptions separated by commas
+        title: titles,
+        description: descriptions || null,
         status: formData.status,
         priority: formData.priority,
         startDate: formData.startDate && formData.startDate.trim() !== '' ? formData.startDate : null,
@@ -630,7 +984,7 @@ export default function TasksPage() {
     } finally {
       setIsSavingTask(false)
     }
-  }, [formData, closeDialog, fetchTasks, fetchProjects, user?.role, isSavingTask])
+  }, [taskFields, formData, closeDialog, fetchTasks, fetchProjects, user?.role, isSavingTask])
 
   const handleUpdateTask = useCallback(async () => {
     if (!editingTask) return
@@ -1314,17 +1668,24 @@ export default function TasksPage() {
         return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
       }
       
-      // Default sort: In-progress tasks first, then by due date
-      // In-progress tasks first
-      if (a.status === 'IN_PROGRESS' && b.status !== 'IN_PROGRESS') return -1
-      if (b.status === 'IN_PROGRESS' && a.status !== 'IN_PROGRESS') return 1
-      
-      // Then by due date
-      if (a.dueDate && b.dueDate) {
-        return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()
+      // Default sort: By statusUpdatedAt (most recently updated first), then by createdAt
+      // Tasks with statusUpdatedAt come first
+      if (a.statusUpdatedAt && b.statusUpdatedAt) {
+        const aTime = new Date(a.statusUpdatedAt).getTime()
+        const bTime = new Date(b.statusUpdatedAt).getTime()
+        return bTime - aTime // Descending order (newest first)
       }
-      if (a.dueDate) return -1
-      if (b.dueDate) return 1
+      if (a.statusUpdatedAt) return -1
+      if (b.statusUpdatedAt) return 1
+      
+      // If no statusUpdatedAt, sort by createdAt
+      if (a.createdAt && b.createdAt) {
+        const aTime = new Date(a.createdAt).getTime()
+        const bTime = new Date(b.createdAt).getTime()
+        return bTime - aTime // Descending order (newest first)
+      }
+      if (a.createdAt) return -1
+      if (b.createdAt) return 1
       
       return 0
     })
@@ -1649,17 +2010,58 @@ export default function TasksPage() {
             Showing {filteredTeamTasks.length} task{filteredTeamTasks.length !== 1 ? 's' : ''}
           </div>
         </div>
-        {filteredTeamTasks.length === 0 ? (
-          <Card>
-            <CardContent className="py-8 text-center text-muted-foreground">
-              {!isSuperAdmin && normalizedDepartmentFilter
-                ? `No team tasks found for ${user?.department}.`
-                : 'No team tasks found.'}
-            </CardContent>
-          </Card>
-        ) : (
-          renderTasks(filteredTeamTasks)
-        )}
+        <AnimatePresence mode="wait">
+          {isInitialLoadingTeamTasks ? (
+            <motion.div
+              key="skeleton"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              {viewMode === 'list' ? (
+                <TaskTableSkeleton count={5} />
+              ) : (
+                <TaskListSkeleton count={6} />
+              )}
+            </motion.div>
+          ) : filteredTeamTasks.length === 0 ? (
+            <motion.div
+              key="empty"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+            >
+              <Card>
+                <CardContent className="py-8 text-center text-muted-foreground">
+                  {!isSuperAdmin && normalizedDepartmentFilter
+                    ? `No team tasks found for ${user?.department}.`
+                    : 'No team tasks found.'}
+                </CardContent>
+              </Card>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="content"
+              ref={teamTasksScrollRef}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+            >
+              {renderTasks(filteredTeamTasks)}
+              {teamTasksHasMore && (
+                <div id="team-tasks-sentinel" className="h-1" />
+              )}
+              {isLoadingTeamTasks && (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     )
   }
@@ -1714,43 +2116,109 @@ export default function TasksPage() {
               <DialogDescription>
                 {editingTask 
                   ? 'Update the task details below.' 
-                  : 'Fill in the details to create a new task. You can create multiple tasks by separating titles with commas.'}
+                  : 'Fill in the details to create a new task. Click the plus icon to add multiple tasks.'}
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleFormSubmit} className="space-y-4">
-              <div>
-                <Label htmlFor="title">Title *</Label>
-                <Input
-                  id="title"
-                  name="title"
-                  value={formData.title}
-                  onChange={(e) => updateFormField('title', e.target.value)}
-                  placeholder="Task title, or multiple titles separated by commas (e.g., task1, task2, task3)"
-                  required
-                />
-                {!editingTask && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Enter multiple titles separated by commas to create multiple tasks at once
-                  </p>
-                )}
-              </div>
+              {editingTask ? (
+                <>
+                  <div>
+                    <Label htmlFor="title">Title *</Label>
+                    <Input
+                      id="title"
+                      name="title"
+                      value={formData.title}
+                      onChange={(e) => updateFormField('title', e.target.value)}
+                      placeholder="Task title"
+                      required
+                    />
+                  </div>
 
-              <div>
-                <Label htmlFor="description">Description</Label>
-                <textarea
-                  id="description"
-                  name="description"
-                  className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  value={formData.description}
-                  onChange={(e) => updateFormField('description', e.target.value)}
-                  placeholder="Task description, or multiple descriptions separated by commas"
-                />
-                {!editingTask && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Optional: Enter descriptions separated by commas. First description maps to first task, second to second, etc.
-                  </p>
-                )}
-              </div>
+                  <div>
+                    <Label htmlFor="description">Description</Label>
+                    <textarea
+                      id="description"
+                      name="description"
+                      className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      value={formData.description}
+                      onChange={(e) => updateFormField('description', e.target.value)}
+                      placeholder="Task description"
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <Label>Tasks *</Label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Add multiple tasks by clicking the plus icon
+                    </p>
+                    {taskFields.map((field, index) => (
+                      <div key={index} className="mb-4 p-4 border rounded-lg space-y-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 space-y-3">
+                            <div>
+                              <Label htmlFor={`title-${index}`}>
+                                Title {index + 1} {index === 0 && '*'}
+                              </Label>
+                              <Input
+                                id={`title-${index}`}
+                                value={field.title}
+                                onChange={(e) => {
+                                  const newFields = [...taskFields]
+                                  newFields[index].title = e.target.value
+                                  setTaskFields(newFields)
+                                }}
+                                placeholder="Enter task title"
+                                required={index === 0}
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor={`description-${index}`}>Description {index + 1}</Label>
+                              <textarea
+                                id={`description-${index}`}
+                                className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                value={field.description}
+                                onChange={(e) => {
+                                  const newFields = [...taskFields]
+                                  newFields[index].description = e.target.value
+                                  setTaskFields(newFields)
+                                }}
+                                placeholder="Enter task description (optional)"
+                              />
+                            </div>
+                          </div>
+                          {taskFields.length > 1 && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="mt-6 text-destructive hover:text-destructive hover:bg-destructive/10"
+                              onClick={() => {
+                                const newFields = taskFields.filter((_, i) => i !== index)
+                                setTaskFields(newFields)
+                              }}
+                            >
+                              <Minus className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setTaskFields([...taskFields, { title: '', description: '' }])
+                      }}
+                      className="w-full"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Another Task
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {shouldShowMediaFields && (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -1881,7 +2349,25 @@ export default function TasksPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="project">Project (Optional)</Label>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label htmlFor="project">Project (Optional)</Label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProjectFormData({
+                          name: '',
+                          description: '',
+                          brand: '',
+                          company: '',
+                          status: 'ACTIVE',
+                        })
+                        setIsProjectDialogOpen(true)
+                      }}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      + Add New Project
+                    </button>
+                  </div>
                   <Select
                     value={formData.projectId || 'none'}
                     onValueChange={(value) => {
@@ -1894,7 +2380,7 @@ export default function TasksPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">None</SelectItem>
-                      {projects.map((project) => (
+                      {(Array.isArray(projects) ? projects : []).map((project) => (
                         <SelectItem key={project.id} value={project.id}>
                           {project.name}
                         </SelectItem>
@@ -2303,7 +2789,43 @@ export default function TasksPage() {
                 </Select>
               </div>
             </div>
-            {renderTasks(tasks, myTasksSort)}
+            <div ref={myTasksScrollRef}>
+              <AnimatePresence mode="wait">
+                {isInitialLoadingMyTasks ? (
+                  <motion.div
+                    key="skeleton"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    {viewMode === 'list' ? (
+                      <TaskTableSkeleton count={5} />
+                    ) : (
+                      <TaskListSkeleton count={6} />
+                    )}
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="content"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    {renderTasks(tasks, myTasksSort)}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              {!isInitialLoadingMyTasks && myTasksHasMore && (
+                <div id="my-tasks-sentinel" className="h-1" />
+              )}
+              {!isInitialLoadingMyTasks && isLoadingMyTasks && (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
           </TabsContent>
           <TabsContent value="team" className="space-y-4">
             {renderTeamTasks()}
@@ -2333,7 +2855,43 @@ export default function TasksPage() {
                 </Select>
               </div>
             </div>
-            {renderTasks(getUnderReviewTasks())}
+            <div ref={reviewTasksScrollRef}>
+              <AnimatePresence mode="wait">
+                {isInitialLoadingReviewTasks ? (
+                  <motion.div
+                    key="skeleton"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    {viewMode === 'list' ? (
+                      <TaskTableSkeleton count={5} />
+                    ) : (
+                      <TaskListSkeleton count={6} />
+                    )}
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="content"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    {renderTasks(getUnderReviewTasks())}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              {!isInitialLoadingReviewTasks && reviewTasksHasMore && (
+                <div id="review-tasks-sentinel" className="h-1" />
+              )}
+              {!isInitialLoadingReviewTasks && isLoadingReviewTasks && (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
           </TabsContent>
           {showOtherDeptTab && (
             <TabsContent value="otherDept" className="space-y-4">
@@ -2360,31 +2918,140 @@ export default function TasksPage() {
                     </SelectContent>
                   </Select>
                   <div className="text-sm text-muted-foreground">
-                    {isLoadingOtherDept
+                    {isInitialLoadingOtherDept
                       ? 'Loading tasks from other departments...'
                       : `Showing ${otherDepartmentTasks.length} task${otherDepartmentTasks.length !== 1 ? 's' : ''}`}
                   </div>
                 </div>
               </div>
-              {isLoadingOtherDept ? (
-                <Card>
-                  <CardContent className="py-8 text-center text-muted-foreground">
-                    <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-                    Loading other department tasks...
-                  </CardContent>
-                </Card>
-              ) : otherDepartmentTasks.length === 0 ? (
-                <Card>
-                  <CardContent className="py-8 text-center text-muted-foreground">
-                    No tasks from other departments are available right now.
-                  </CardContent>
-                </Card>
-              ) : (
-                renderTasks(otherDepartmentTasks)
-              )}
+              <AnimatePresence mode="wait">
+                {isInitialLoadingOtherDept ? (
+                  <motion.div
+                    key="skeleton"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    {viewMode === 'list' ? (
+                      <TaskTableSkeleton count={5} />
+                    ) : (
+                      <TaskListSkeleton count={6} />
+                    )}
+                  </motion.div>
+                ) : otherDepartmentTasks.length === 0 ? (
+                  <motion.div
+                    key="empty"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <Card>
+                      <CardContent className="py-8 text-center text-muted-foreground">
+                        No tasks from other departments are available right now.
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="content"
+                    ref={otherDeptTasksScrollRef}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    {renderTasks(otherDepartmentTasks)}
+                    {otherDeptTasksHasMore && (
+                      <div id="other-dept-tasks-sentinel" className="h-1" />
+                    )}
+                    {isLoadingOtherDept && (
+                      <div className="flex justify-center py-4">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </TabsContent>
           )}
         </Tabs>
+
+        {/* Create New Project Dialog */}
+        <Dialog open={isProjectDialogOpen} onOpenChange={setIsProjectDialogOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Create New Project</DialogTitle>
+              <DialogDescription>
+                Fill in the details to create a new project.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="projectName">Project Name *</Label>
+                <Input
+                  id="projectName"
+                  value={projectFormData.name}
+                  onChange={(e) => setProjectFormData({ ...projectFormData, name: e.target.value })}
+                  placeholder="Project name"
+                  required
+                />
+              </div>
+              <div>
+                <Label htmlFor="projectDescription">Description</Label>
+                <textarea
+                  id="projectDescription"
+                  className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  value={projectFormData.description}
+                  onChange={(e) => setProjectFormData({ ...projectFormData, description: e.target.value })}
+                  placeholder="Project description"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="projectBrand">Brand</Label>
+                  <Input
+                    id="projectBrand"
+                    value={projectFormData.brand}
+                    onChange={(e) => setProjectFormData({ ...projectFormData, brand: e.target.value })}
+                    placeholder="Brand name"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="projectCompany">Company</Label>
+                  <Input
+                    id="projectCompany"
+                    value={projectFormData.company}
+                    onChange={(e) => setProjectFormData({ ...projectFormData, company: e.target.value })}
+                    placeholder="Company name"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setIsProjectDialogOpen(false)
+                    setProjectFormData({
+                      name: '',
+                      description: '',
+                      brand: '',
+                      company: '',
+                      status: 'ACTIVE',
+                    })
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button type="button" onClick={handleCreateProject}>
+                  Create Project
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </MainLayout>
   )

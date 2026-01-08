@@ -14,8 +14,9 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Edit, Trash2, Users, FolderKanban, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, GanttChart, UserPlus, Mail, Loader2, MoreVertical } from 'lucide-react'
+import { ProjectListSkeleton } from '@/components/skeletons/project-skeleton'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend } from 'recharts'
 import { format } from 'date-fns'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -75,6 +76,7 @@ export default function ProjectsPage() {
     status: 'ACTIVE',
   })
   const [isRefreshing, setIsRefreshing] = useState<boolean>(!projectsCache)
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(!projectsCache)
   const [searchQuery, setSearchQuery] = useState('')
   const [departmentFilter, setDepartmentFilter] = useState<string>('all')
   const [departments, setDepartments] = useState<string[]>([])
@@ -111,9 +113,13 @@ export default function ProjectsPage() {
       setProjects(projectsCache as Project[])
       setIsRefreshing(true)
       apiClient
-        .getProjects(false)
+        .getProjects({ limit: 1000, skip: 0, useCache: false })
         .then((data) => {
-          projectsCache = data as Project[]
+          // Handle new paginated response format
+          const projectsArray = Array.isArray(data)
+            ? data
+            : (data as any)?.projects || []
+          projectsCache = projectsArray as Project[]
           projectsCacheTimestamp = Date.now()
           setProjects(projectsCache)
         })
@@ -125,9 +131,14 @@ export default function ProjectsPage() {
     }
 
     try {
+      setIsInitialLoading(true)
       setIsRefreshing(true)
-      const data = await apiClient.getProjects(useCache)
-      projectsCache = data as Project[]
+      const data = await apiClient.getProjects({ limit: 1000, skip: 0, useCache })
+      // Handle new paginated response format
+      const projectsArray = Array.isArray(data)
+        ? data
+        : (data as any)?.projects || []
+      projectsCache = projectsArray as Project[]
       projectsCacheTimestamp = Date.now()
       setProjects(projectsCache)
     } catch (error: any) {
@@ -135,6 +146,7 @@ export default function ProjectsPage() {
       alert(error.message || 'Failed to fetch projects. Please try again.')
     } finally {
       setIsRefreshing(false)
+      setIsInitialLoading(false)
     }
   }, [])
 
@@ -149,13 +161,20 @@ export default function ProjectsPage() {
 
   const fetchTeamMembers = useCallback(async (deptFilter?: string) => {
     try {
-      const params: { department?: string } = {}
+      const params: { department?: string; limit?: number; skip?: number } = {}
       const isSuperAdminUser = userRole.toUpperCase() === 'SUPER_ADMIN'
       if (isSuperAdminUser && deptFilter && deptFilter !== 'all') {
         params.department = deptFilter
       }
+      // Get all members for dropdown
+      params.limit = 1000
+      params.skip = 0
       const membersData = await apiClient.getTeamMembers(params)
-      setAllMembers(membersData as { id: string; name?: string; email: string; department?: string }[])
+      // Handle new paginated response format
+      const membersArray = Array.isArray(membersData)
+        ? membersData
+        : (membersData as any)?.members || []
+      setAllMembers(membersArray as { id: string; name?: string; email: string; department?: string }[])
     } catch (error) {
       console.error('Failed to fetch team members:', error)
     }
@@ -530,7 +549,8 @@ export default function ProjectsPage() {
   }, [searchQuery])
 
   const filteredProjects = useMemo(() => {
-    return projects.filter(project => 
+    const projectsArray = Array.isArray(projects) ? projects : []
+    return projectsArray.filter(project => 
       matchesSearchQuery(project) && matchesDepartmentFilter(project)
     )
   }, [projects, matchesSearchQuery, matchesDepartmentFilter])
@@ -585,7 +605,8 @@ export default function ProjectsPage() {
   }, [collabDepartmentFilter, isCollabDialogOpen, isSuperAdmin, fetchTeamMembers])
 
   const filteredMembers = useMemo(() => {
-    let members = allMembers
+    const membersArray = Array.isArray(allMembers) ? allMembers : []
+    let members = membersArray
     
     // Filter by search query
     if (memberSearch.trim()) {
@@ -1132,16 +1153,42 @@ export default function ProjectsPage() {
 
         {/* Manage Projects Section */}
         <div className="space-y-4">
-            {filteredProjects.length === 0 ? (
-              <Card>
-                <CardContent className="py-8 text-center text-muted-foreground">
-                  {projects.length === 0 
-                    ? 'No projects found. Create your first project!'
-                    : 'No projects match your filters.'}
-                </CardContent>
-              </Card>
-            ) : (
-              <>
+            <AnimatePresence mode="wait">
+              {isInitialLoading ? (
+                <motion.div
+                  key="skeleton"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <ProjectListSkeleton count={6} />
+                </motion.div>
+              ) : filteredProjects.length === 0 ? (
+                <motion.div
+                  key="empty"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <Card>
+                    <CardContent className="py-8 text-center text-muted-foreground">
+                      {projects.length === 0 
+                        ? 'No projects found. Create your first project!'
+                        : 'No projects match your filters.'}
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="content"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <>
                 {viewMode === 'gantt' && (
                   <Card>
                     <CardHeader>
@@ -1291,8 +1338,10 @@ export default function ProjectsPage() {
                     ))}
                   </div>
                 )}
-              </>
-            )}
+                  </>
+                </motion.div>
+              )}
+            </AnimatePresence>
         </div>
 
         {/* Invite Member Dialog */}

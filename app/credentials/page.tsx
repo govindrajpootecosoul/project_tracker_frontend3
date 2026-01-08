@@ -16,8 +16,9 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Edit, Trash2, Users as UsersIcon, Download, Eye, EyeOff, Copy, Check, CreditCard, Loader2 } from 'lucide-react'
+import { CredentialListSkeleton } from '@/components/skeletons/credential-skeleton'
 import { format } from 'date-fns'
 
 interface Credential {
@@ -37,6 +38,7 @@ interface Credential {
     id: string
     name?: string
     email: string
+    department?: string
   }
   members: {
     id: string
@@ -119,21 +121,68 @@ export default function CredentialsPage() {
   const [collabDialogTab, setCollabDialogTab] = useState<'invite' | 'manage'>('invite')
   const [expandedManageCredentialId, setExpandedManageCredentialId] = useState<string | null>(null)
   const [removingMemberKey, setRemovingMemberKey] = useState<string | null>(null)
+  const [selectedMembersForRemoval, setSelectedMembersForRemoval] = useState<Set<string>>(new Set())
+  const [isBulkRemoving, setIsBulkRemoving] = useState(false)
+  const [selectedDepartmentMemberId, setSelectedDepartmentMemberId] = useState<string | null>(null)
+  const [departmentMembers, setDepartmentMembers] = useState<User[]>([])
+  const [currentUserDepartment, setCurrentUserDepartment] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'all' | 'my' | 'shared' | 'department'>('all')
+  const [filterCompany, setFilterCompany] = useState<string>('')
+  const [filterGeography, setFilterGeography] = useState<string>('')
+  const [filterPlatform, setFilterPlatform] = useState<string>('')
+  const [companyInputValue, setCompanyInputValue] = useState<string>('')
+  const [geographyInputValue, setGeographyInputValue] = useState<string>('')
+  const [platformInputValue, setPlatformInputValue] = useState<string>('')
+  const [isCompanyOpen, setIsCompanyOpen] = useState(false)
+  const [isGeographyOpen, setIsGeographyOpen] = useState(false)
+  const [isPlatformOpen, setIsPlatformOpen] = useState(false)
+  const [isInitialLoading, setIsInitialLoading] = useState(true)
 
   const fetchCredentials = useCallback(async (): Promise<Credential[]> => {
     try {
-      const data = await apiClient.getCredentials()
-      setCredentials(data as Credential[])
-      return data as Credential[]
+      setIsInitialLoading(true)
+      const data = await apiClient.getCredentials({ limit: 1000, skip: 0 }) // Get all credentials for the page
+      // Handle new paginated response format
+      const credentialsArray = Array.isArray(data)
+        ? data
+        : (data as any)?.credentials || []
+      setCredentials(credentialsArray as Credential[])
+      return credentialsArray as Credential[]
     } catch (error) {
       console.error('Failed to fetch credentials:', error)
       return []
+    } finally {
+      setIsInitialLoading(false)
     }
   }, [])
 
   // Calculate KPIs
-  const totalCredentials = credentials.length
-  const sharedCredentials = credentials.filter(c => c.privacyLevel === 'PUBLIC' && c.members.length > 0).length
+  const credentialsArray = Array.isArray(credentials) ? credentials : []
+  const totalCredentials = credentialsArray.length
+  const sharedCredentials = credentialsArray.filter(c => c.privacyLevel === 'PUBLIC' && c.members.length > 0).length
+
+  // Filter credentials by tab
+  const filteredCredentialsByTab = useMemo(() => {
+    const credentialsArray = Array.isArray(credentials) ? credentials : []
+    switch (activeTab) {
+      case 'my':
+        return credentialsArray.filter(c => c.createdBy.id === currentUser?.id)
+      case 'shared':
+        // Show only credentials where current user is a member (in collaboration)
+        return credentialsArray.filter(c => 
+          c.members.some(m => m.user.id === currentUser?.id)
+        )
+      case 'department':
+        return credentialsArray.filter(c => 
+          c.privacyLevel === 'PUBLIC' && 
+          c.createdBy.department === currentUserDepartment &&
+          c.createdBy.id !== currentUser?.id
+        )
+      case 'all':
+      default:
+        return credentialsArray
+    }
+  }, [credentials, activeTab, currentUser?.id, currentUserDepartment])
 
   const kpiCards = [
     {
@@ -152,10 +201,10 @@ export default function CredentialsPage() {
     },
   ]
 
-  const publicCredentials = useMemo(
-    () => credentials.filter((credential) => credential.privacyLevel === 'PUBLIC'),
-    [credentials],
-  )
+  const publicCredentials = useMemo(() => {
+    const credentialsArray = Array.isArray(credentials) ? credentials : []
+    return credentialsArray.filter((credential) => credential.privacyLevel === 'PUBLIC')
+  }, [credentials])
 
   const totalCollaborationMembers = useMemo(
     () => publicCredentials.reduce((total, credential) => total + credential.members.length, 0),
@@ -194,6 +243,28 @@ export default function CredentialsPage() {
     }
   }, [])
 
+  const fetchDepartmentMembers = useCallback(async () => {
+    try {
+      if (!currentUserDepartment) return
+      
+      // Fetch users in the same department
+      const data = await apiClient.getTeamUsers({ department: currentUserDepartment })
+      // Include all users including current user
+      const allMembers = data as User[]
+      
+      // If current user is not in the list, add them
+      const members = allMembers.some(u => u.id === currentUser?.id)
+        ? allMembers
+        : currentUser
+          ? [...allMembers, { id: currentUser.id, name: currentUser.name, email: currentUser.email } as User]
+          : allMembers
+      
+      setDepartmentMembers(members)
+    } catch (error) {
+      console.error('Failed to fetch department members:', error)
+    }
+  }, [currentUserDepartment, currentUser])
+
   useEffect(() => {
     const token = getToken()
     if (!token) {
@@ -206,6 +277,9 @@ export default function CredentialsPage() {
         const user = await apiClient.getUserRole()
         if (user?.id) {
           setCurrentUser({ id: user.id, name: user.name, email: user.email })
+          if (user.department) {
+            setCurrentUserDepartment(user.department)
+          }
         }
         const isAdmin = user.role === 'ADMIN' || user.role === 'SUPER_ADMIN'
         const hasAccess = isAdmin || user.hasCredentialAccess === true
@@ -225,6 +299,44 @@ export default function CredentialsPage() {
     fetchCredentials()
     fetchUsers()
   }, [router, fetchCredentials, fetchUsers])
+
+  useEffect(() => {
+    if (currentUserDepartment) {
+      fetchDepartmentMembers()
+    }
+  }, [currentUserDepartment, fetchDepartmentMembers])
+
+  // Reset geography and platform when company changes
+  useEffect(() => {
+    if (!filterCompany) {
+      setFilterGeography('')
+      setFilterPlatform('')
+      setGeographyInputValue('')
+      setPlatformInputValue('')
+    }
+  }, [filterCompany])
+
+  // Reset platform when geography changes
+  useEffect(() => {
+    if (!filterGeography) {
+      setFilterPlatform('')
+      setPlatformInputValue('')
+    }
+  }, [filterGeography])
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      if (!target.closest('.filter-dropdown-container')) {
+        setIsCompanyOpen(false)
+        setIsGeographyOpen(false)
+        setIsPlatformOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -298,7 +410,20 @@ export default function CredentialsPage() {
         return
       }
 
-      await apiClient.updateCredential(editingCredential.id, formData)
+      // Send all fields including empty optional ones
+      const updateData = {
+        company: formData.company,
+        geography: formData.geography,
+        platform: formData.platform,
+        url: formData.url,
+        username: formData.username,
+        password: formData.password,
+        authenticator: formData.authenticator,
+        notes: formData.notes,
+        privacyLevel: formData.privacyLevel,
+      }
+
+      await apiClient.updateCredential(editingCredential.id, updateData)
       closeDialog()
       await fetchCredentials()
     } catch (error: any) {
@@ -396,7 +521,7 @@ export default function CredentialsPage() {
   const handleExport = () => {
     const csv = [
       ['Company', 'Geography', 'Platform', 'URL', 'Username', 'Password', 'Authenticator', 'Notes'],
-      ...credentials.map(c => [
+      ...(Array.isArray(credentials) ? credentials : []).map(c => [
         c.company,
         c.geography,
         c.platform,
@@ -487,6 +612,7 @@ export default function CredentialsPage() {
       if (!open) {
         resetBulkCollabState()
         setCollabDialogTab('invite')
+        setSelectedMembersForRemoval(new Set())
       }
     },
     [resetBulkCollabState],
@@ -512,7 +638,153 @@ export default function CredentialsPage() {
 
   const toggleManageCredential = useCallback((credentialId: string) => {
     setExpandedManageCredentialId(prev => (prev === credentialId ? null : credentialId))
+    // Clear selections when collapsing
+    if (expandedManageCredentialId === credentialId) {
+      setSelectedMembersForRemoval(new Set())
+    }
+  }, [expandedManageCredentialId])
+
+  // Get all credentials where a specific user is a member
+  const getCredentialsForMember = useCallback((userId: string) => {
+    const credentialsArray = Array.isArray(credentials) ? credentials : []
+    return credentialsArray.filter(c => 
+      c.members.some(m => m.user.id === userId)
+    )
+  }, [credentials])
+
+  // Remove a member from all credentials they're collaborating on
+  const handleRemoveMemberFromAllCredentials = useCallback(async (userId: string, userName: string) => {
+    const memberCredentials = getCredentialsForMember(userId)
+    
+    if (memberCredentials.length === 0) {
+      alert('This member is not collaborating on any credentials.')
+      return
+    }
+
+    // Filter to only include credentials where current user has permission to remove members
+    // User must be the creator or have editor role
+    const removableCredentials = memberCredentials.filter(credential => {
+      const isCreator = credential.createdBy.id === currentUser?.id
+      const isEditor = credential.members.some(m => 
+        m.user.id === currentUser?.id && m.role === 'editor'
+      )
+      return isCreator || isEditor
+    })
+
+    if (removableCredentials.length === 0) {
+      alert('You do not have permission to remove this member from any credentials.')
+      return
+    }
+
+    const totalCount = memberCredentials.length
+    const removableCount = removableCredentials.length
+    const nonRemovableCount = totalCount - removableCount
+
+    let confirmMessage = `Are you sure you want to remove ${userName} from ${removableCount} credential${removableCount > 1 ? 's' : ''}?`
+    if (nonRemovableCount > 0) {
+      confirmMessage += `\n\nNote: ${userName} is also collaborating on ${nonRemovableCount} other credential${nonRemovableCount > 1 ? 's' : ''} where you don't have permission to remove them.`
+    }
+
+    const confirmed = window.confirm(confirmMessage)
+    if (!confirmed) return
+
+    setIsBulkRemoving(true)
+    const removals = removableCredentials.map(async (credential) => {
+      const member = credential.members.find(m => m.user.id === userId)
+      if (!member) return { success: false, credentialId: credential.id, error: 'Member not found' }
+      
+      try {
+        await apiClient.removeCredentialMember(credential.id, member.id)
+        return { success: true, credentialId: credential.id }
+      } catch (error: any) {
+        console.error(`Failed to remove member from credential ${credential.id}:`, error)
+        return { success: false, credentialId: credential.id, error: error.message }
+      }
+    })
+
+    const results = await Promise.all(removals)
+    const successCount = results.filter(r => r.success).length
+    const failCount = results.filter(r => !r.success).length
+
+    let message = `${userName} removed from ${successCount} credential${successCount !== 1 ? 's' : ''} successfully.`
+    if (failCount > 0) {
+      message += ` ${failCount} removal${failCount !== 1 ? 's' : ''} failed.`
+    }
+    if (nonRemovableCount > 0) {
+      message += `\n\nNote: ${userName} is still collaborating on ${nonRemovableCount} credential${nonRemovableCount > 1 ? 's' : ''} where you don't have permission to remove them.`
+    }
+    alert(message)
+
+    await fetchCredentials()
+    setIsBulkRemoving(false)
+  }, [getCredentialsForMember, currentUser?.id, fetchCredentials])
+
+  const toggleMemberSelectionForRemoval = useCallback((memberKey: string) => {
+    setSelectedMembersForRemoval(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(memberKey)) {
+        newSet.delete(memberKey)
+      } else {
+        newSet.add(memberKey)
+      }
+      return newSet
+    })
   }, [])
+
+  const selectAllMembersForCredential = useCallback((credentialId: string, members: { id: string }[]) => {
+    const memberKeys = members.map(m => `${credentialId}:${m.id}`)
+    setSelectedMembersForRemoval(prev => {
+      const newSet = new Set(prev)
+      const allSelected = memberKeys.every(key => newSet.has(key))
+      if (allSelected) {
+        // Deselect all
+        memberKeys.forEach(key => newSet.delete(key))
+      } else {
+        // Select all
+        memberKeys.forEach(key => newSet.add(key))
+      }
+      return newSet
+    })
+  }, [])
+
+  const handleBulkRemoveMembers = useCallback(async () => {
+    if (selectedMembersForRemoval.size === 0) {
+      alert('Please select at least one member to remove')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Are you sure you want to remove ${selectedMembersForRemoval.size} collaborator${selectedMembersForRemoval.size > 1 ? 's' : ''}?`
+    )
+    if (!confirmed) return
+
+    setIsBulkRemoving(true)
+    const memberKeys = Array.from(selectedMembersForRemoval)
+    const removals = memberKeys.map(async (memberKey) => {
+      const [credentialId, memberId] = memberKey.split(':')
+      try {
+        await apiClient.removeCredentialMember(credentialId, memberId)
+        return { success: true, memberKey }
+      } catch (error: any) {
+        console.error(`Failed to remove member ${memberKey}:`, error)
+        return { success: false, memberKey, error: error.message }
+      }
+    })
+
+    const results = await Promise.all(removals)
+    const successCount = results.filter(r => r.success).length
+    const failCount = results.filter(r => !r.success).length
+
+    if (failCount > 0) {
+      alert(`${successCount} member${successCount !== 1 ? 's' : ''} removed successfully. ${failCount} removal${failCount !== 1 ? 's' : ''} failed.`)
+    } else {
+      alert(`${successCount} member${successCount !== 1 ? 's' : ''} removed successfully.`)
+    }
+
+    setSelectedMembersForRemoval(new Set())
+    await fetchCredentials()
+    setIsBulkRemoving(false)
+  }, [selectedMembersForRemoval, fetchCredentials])
 
   const handleCollabSummaryDialogChange = useCallback((open: boolean) => {
     setIsCollabSummaryDialogOpen(open)
@@ -570,27 +842,235 @@ export default function CredentialsPage() {
           })}
         </div>
 
-        {credentials.length === 0 ? (
-          <Card>
-            <CardContent className="py-8 text-center text-muted-foreground">
-              No credentials found. Click "Add Credential" to get started.
-            </CardContent>
-          </Card>
-        ) : (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Credentials</CardTitle>
-              <div className="flex items-center gap-2">
-                <Input
-                  placeholder="Search credentials..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-64"
-                />
-                <Button variant="outline" onClick={handleExport}>
-                  <Download className="h-4 w-4 mr-2" />
-                  Export
-                </Button>
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'all' | 'my' | 'shared' | 'department')} className="space-y-4">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="all">All Credentials</TabsTrigger>
+            <TabsTrigger value="my">My Credentials</TabsTrigger>
+            <TabsTrigger value="shared">Shared Credentials</TabsTrigger>
+            <TabsTrigger value="department">Department Credentials</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="all" className="space-y-4 mt-4">
+            <AnimatePresence mode="wait">
+              {isInitialLoading ? (
+                <motion.div
+                  key="skeleton"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <CredentialListSkeleton count={6} />
+                </motion.div>
+              ) : filteredCredentialsByTab.length === 0 ? (
+                <motion.div
+                  key="empty"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <Card>
+                    <CardContent className="py-8 text-center text-muted-foreground">
+                      No credentials found. Click "Add Credential" to get started.
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="content"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <Card>
+            <CardHeader className="flex flex-col gap-4">
+              <div className="flex flex-row items-center justify-between">
+                <CardTitle>Credentials</CardTitle>
+                <div className="flex items-center gap-2">
+                  {departmentMembers.length > 0 && (
+                    <Select
+                      value={selectedDepartmentMemberId || 'all'}
+                      onValueChange={(value) => setSelectedDepartmentMemberId(value === 'all' ? null : value)}
+                    >
+                      <SelectTrigger className="w-64">
+                        <SelectValue placeholder="Filter by department member" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Members</SelectItem>
+                        {departmentMembers.map((member) => (
+                          <SelectItem key={member.id} value={member.id}>
+                            {member.name || member.email}
+                            {member.id === currentUser?.id && ' (You)'}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <Input
+                    placeholder="Search credentials..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-64"
+                  />
+                  <Button variant="outline" onClick={handleExport}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Export
+                  </Button>
+                </div>
+              </div>
+              
+              {/* Company, Geography, Platform Filters */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex-1 min-w-[200px]">
+                  <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
+                  <div className="relative">
+                    <Input
+                      placeholder="Select or type company..."
+                      value={companyInputValue || filterCompany}
+                      onChange={(e) => {
+                        setCompanyInputValue(e.target.value)
+                        setIsCompanyOpen(true)
+                      }}
+                      onFocus={() => setIsCompanyOpen(true)}
+                      className="w-full"
+                    />
+                    {isCompanyOpen && filteredCompanies.length > 0 && (
+                      <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                        <div
+                          className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                          onClick={() => {
+                            setFilterCompany('')
+                            setCompanyInputValue('')
+                            setIsCompanyOpen(false)
+                          }}
+                        >
+                          Clear filter
+                        </div>
+                        {filteredCompanies.map((company) => (
+                          <div
+                            key={company}
+                            className="p-2 cursor-pointer hover:bg-accent text-sm"
+                            onClick={() => {
+                              setFilterCompany(company)
+                              setCompanyInputValue(company)
+                              setIsCompanyOpen(false)
+                            }}
+                          >
+                            {company}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                  <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
+                  <div className="relative">
+                    <Input
+                      placeholder={filterCompany ? "Select or type geography..." : "Select company first"}
+                      value={geographyInputValue || filterGeography}
+                      onChange={(e) => {
+                        setGeographyInputValue(e.target.value)
+                        setIsGeographyOpen(true)
+                      }}
+                      onFocus={() => filterCompany && setIsGeographyOpen(true)}
+                      disabled={!filterCompany}
+                      className="w-full"
+                    />
+                    {isGeographyOpen && filterCompany && filteredGeographiesByInput.length > 0 && (
+                      <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                        <div
+                          className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                          onClick={() => {
+                            setFilterGeography('')
+                            setGeographyInputValue('')
+                            setIsGeographyOpen(false)
+                          }}
+                        >
+                          Clear filter
+                        </div>
+                        {filteredGeographiesByInput.map((geography) => (
+                          <div
+                            key={geography}
+                            className="p-2 cursor-pointer hover:bg-accent text-sm"
+                            onClick={() => {
+                              setFilterGeography(geography)
+                              setGeographyInputValue(geography)
+                              setIsGeographyOpen(false)
+                            }}
+                          >
+                            {geography}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                  <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
+                  <div className="relative">
+                    <Input
+                      placeholder={filterCompany && filterGeography ? "Select or type platform..." : "Select company & geography first"}
+                      value={platformInputValue || filterPlatform}
+                      onChange={(e) => {
+                        setPlatformInputValue(e.target.value)
+                        setIsPlatformOpen(true)
+                      }}
+                      onFocus={() => filterCompany && filterGeography && setIsPlatformOpen(true)}
+                      disabled={!filterCompany || !filterGeography}
+                      className="w-full"
+                    />
+                    {isPlatformOpen && filterCompany && filterGeography && filteredPlatformsByInput.length > 0 && (
+                      <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                        <div
+                          className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                          onClick={() => {
+                            setFilterPlatform('')
+                            setPlatformInputValue('')
+                            setIsPlatformOpen(false)
+                          }}
+                        >
+                          Clear filter
+                        </div>
+                        {filteredPlatformsByInput.map((platform) => (
+                          <div
+                            key={platform}
+                            className="p-2 cursor-pointer hover:bg-accent text-sm"
+                            onClick={() => {
+                              setFilterPlatform(platform)
+                              setPlatformInputValue(platform)
+                              setIsPlatformOpen(false)
+                            }}
+                          >
+                            {platform}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                {(filterCompany || filterGeography || filterPlatform) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setFilterCompany('')
+                      setFilterGeography('')
+                      setFilterPlatform('')
+                      setCompanyInputValue('')
+                      setGeographyInputValue('')
+                      setPlatformInputValue('')
+                    }}
+                    className="mt-6"
+                  >
+                    Clear Filters
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -611,8 +1091,31 @@ export default function CredentialsPage() {
                     </tr>
                   </thead>
             <tbody>
-              {credentials
+              {filteredCredentialsByTab
                 .filter(credential => {
+                  // Filter by company
+                  if (filterCompany && credential.company !== filterCompany) {
+                    return false
+                  }
+                  
+                  // Filter by geography
+                  if (filterGeography && credential.geography !== filterGeography) {
+                    return false
+                  }
+                  
+                  // Filter by platform
+                  if (filterPlatform && credential.platform !== filterPlatform) {
+                    return false
+                  }
+                  
+                  // Filter by selected department member (only show public credentials created by them)
+                  if (selectedDepartmentMemberId) {
+                    if (credential.privacyLevel !== 'PUBLIC' || credential.createdBy.id !== selectedDepartmentMemberId) {
+                      return false
+                    }
+                  }
+                  
+                  // Filter by search query
                   if (!searchQuery.trim()) return true
                   const query = searchQuery.toLowerCase()
                   return (
@@ -808,7 +1311,1316 @@ export default function CredentialsPage() {
               </div>
             </CardContent>
           </Card>
-        )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </TabsContent>
+
+          <TabsContent value="my" className="space-y-4 mt-4">
+            {filteredCredentialsByTab.length === 0 ? (
+              <Card>
+                <CardContent className="py-8 text-center text-muted-foreground">
+                  No credentials created by you. Click "Add Credential" to get started.
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader className="flex flex-col gap-4">
+                  <div className="flex flex-row items-center justify-between">
+                    <CardTitle>My Credentials</CardTitle>
+                    <div className="flex items-center gap-2">
+                      {departmentMembers.length > 0 && (
+                        <Select
+                          value={selectedDepartmentMemberId || 'all'}
+                          onValueChange={(value) => setSelectedDepartmentMemberId(value === 'all' ? null : value)}
+                        >
+                          <SelectTrigger className="w-64">
+                            <SelectValue placeholder="Filter by department member" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Members</SelectItem>
+                            {departmentMembers.map((member) => (
+                              <SelectItem key={member.id} value={member.id}>
+                                {member.name || member.email}
+                                {member.id === currentUser?.id && ' (You)'}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      <Input
+                        placeholder="Search credentials..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-64"
+                      />
+                      <Button variant="outline" onClick={handleExport}>
+                        <Download className="h-4 w-4 mr-2" />
+                        Export
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Company, Geography, Platform Filters */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
+                      <div className="relative">
+                        <Input
+                          placeholder="Select or type company..."
+                          value={companyInputValue || filterCompany}
+                          onChange={(e) => {
+                            setCompanyInputValue(e.target.value)
+                            setIsCompanyOpen(true)
+                          }}
+                          onFocus={() => setIsCompanyOpen(true)}
+                          className="w-full"
+                        />
+                        {isCompanyOpen && filteredCompanies.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            <div
+                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                              onClick={() => {
+                                setFilterCompany('')
+                                setCompanyInputValue('')
+                                setIsCompanyOpen(false)
+                              }}
+                            >
+                              Clear filter
+                            </div>
+                            {filteredCompanies.map((company) => (
+                              <div
+                                key={company}
+                                className="p-2 cursor-pointer hover:bg-accent text-sm"
+                                onClick={() => {
+                                  setFilterCompany(company)
+                                  setCompanyInputValue(company)
+                                  setIsCompanyOpen(false)
+                                }}
+                              >
+                                {company}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
+                      <div className="relative">
+                        <Input
+                          placeholder={filterCompany ? "Select or type geography..." : "Select company first"}
+                          value={geographyInputValue || filterGeography}
+                          onChange={(e) => {
+                            setGeographyInputValue(e.target.value)
+                            setIsGeographyOpen(true)
+                          }}
+                          onFocus={() => filterCompany && setIsGeographyOpen(true)}
+                          disabled={!filterCompany}
+                          className="w-full"
+                        />
+                        {isGeographyOpen && filterCompany && filteredGeographiesByInput.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            <div
+                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                              onClick={() => {
+                                setFilterGeography('')
+                                setGeographyInputValue('')
+                                setIsGeographyOpen(false)
+                              }}
+                            >
+                              Clear filter
+                            </div>
+                            {filteredGeographiesByInput.map((geography) => (
+                              <div
+                                key={geography}
+                                className="p-2 cursor-pointer hover:bg-accent text-sm"
+                                onClick={() => {
+                                  setFilterGeography(geography)
+                                  setGeographyInputValue(geography)
+                                  setIsGeographyOpen(false)
+                                }}
+                              >
+                                {geography}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
+                      <div className="relative">
+                        <Input
+                          placeholder={filterCompany && filterGeography ? "Select or type platform..." : "Select company & geography first"}
+                          value={platformInputValue || filterPlatform}
+                          onChange={(e) => {
+                            setPlatformInputValue(e.target.value)
+                            setIsPlatformOpen(true)
+                          }}
+                          onFocus={() => filterCompany && filterGeography && setIsPlatformOpen(true)}
+                          disabled={!filterCompany || !filterGeography}
+                          className="w-full"
+                        />
+                        {isPlatformOpen && filterCompany && filterGeography && filteredPlatformsByInput.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            <div
+                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                              onClick={() => {
+                                setFilterPlatform('')
+                                setPlatformInputValue('')
+                                setIsPlatformOpen(false)
+                              }}
+                            >
+                              Clear filter
+                            </div>
+                            {filteredPlatformsByInput.map((platform) => (
+                              <div
+                                key={platform}
+                                className="p-2 cursor-pointer hover:bg-accent text-sm"
+                                onClick={() => {
+                                  setFilterPlatform(platform)
+                                  setPlatformInputValue(platform)
+                                  setIsPlatformOpen(false)
+                                }}
+                              >
+                                {platform}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {(filterCompany || filterGeography || filterPlatform) && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setFilterCompany('')
+                          setFilterGeography('')
+                          setFilterPlatform('')
+                          setCompanyInputValue('')
+                          setGeographyInputValue('')
+                          setPlatformInputValue('')
+                        }}
+                        className="mt-6"
+                      >
+                        Clear Filters
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left p-4">Company</th>
+                          <th className="text-left p-4">Geography</th>
+                          <th className="text-left p-4">Platform</th>
+                          <th className="text-left p-4">Privacy</th>
+                          <th className="text-left p-4">URL</th>
+                          <th className="text-left p-4">Username</th>
+                          <th className="text-left p-4">Password</th>
+                          <th className="text-left p-4">Authenticator</th>
+                          <th className="text-left p-4">Members</th>
+                          <th className="text-left p-4">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredCredentialsByTab
+                          .filter(credential => {
+                            // Filter by company
+                            if (filterCompany && credential.company !== filterCompany) {
+                              return false
+                            }
+                            
+                            // Filter by geography
+                            if (filterGeography && credential.geography !== filterGeography) {
+                              return false
+                            }
+                            
+                            // Filter by platform
+                            if (filterPlatform && credential.platform !== filterPlatform) {
+                              return false
+                            }
+                            
+                            if (selectedDepartmentMemberId) {
+                              if (credential.privacyLevel !== 'PUBLIC' || credential.createdBy.id !== selectedDepartmentMemberId) {
+                                return false
+                              }
+                            }
+                            if (!searchQuery.trim()) return true
+                            const query = searchQuery.toLowerCase()
+                            return (
+                              credential.company.toLowerCase().includes(query) ||
+                              credential.geography.toLowerCase().includes(query) ||
+                              credential.platform.toLowerCase().includes(query) ||
+                              credential.url?.toLowerCase().includes(query) ||
+                              credential.username.toLowerCase().includes(query) ||
+                              credential.notes?.toLowerCase().includes(query)
+                            )
+                          })
+                          .map((credential) => (
+                            <motion.tr
+                              key={credential.id}
+                              initial={{ opacity: 0, y: 20 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="border-b hover:bg-accent/50"
+                            >
+                              <td className="p-4">
+                                <div className="font-medium">{credential.company}</div>
+                              </td>
+                              <td className="p-4">{credential.geography}</td>
+                              <td className="p-4">{credential.platform}</td>
+                              <td className="p-4">
+                                <div className="flex items-center gap-2">
+                                  <Switch
+                                    checked={credential.privacyLevel === 'PUBLIC'}
+                                    onCheckedChange={() => handleTogglePrivacy(credential.id, credential.privacyLevel || 'PRIVATE')}
+                                    className={
+                                      credential.privacyLevel === 'PUBLIC'
+                                        ? 'data-[state=checked]:bg-green-600'
+                                        : 'data-[state=unchecked]:bg-red-600'
+                                    }
+                                  />
+                                  <Badge 
+                                    variant={credential.privacyLevel === 'PUBLIC' ? 'default' : 'secondary'}
+                                    className={
+                                      credential.privacyLevel === 'PUBLIC' 
+                                        ? 'bg-green-100 text-green-800 hover:bg-green-200 border-green-300' 
+                                        : 'bg-red-100 text-red-800 hover:bg-red-200 border-red-300'
+                                    }
+                                  >
+                                    {credential.privacyLevel === 'PUBLIC' ? 'Public' : 'Private'}
+                                  </Badge>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                {credential.url ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm truncate max-w-[200px]">{credential.url}</span>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={() => copyToClipboard(credential.url!, `url-${credential.id}`)}
+                                    >
+                                      {copiedField === `url-${credential.id}` ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <Copy className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                              <td className="p-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm">{credential.username}</span>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => copyToClipboard(credential.username, `username-${credential.id}`)}
+                                  >
+                                    {copiedField === `username-${credential.id}` ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : (
+                                      <Copy className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type={showPasswords[credential.id] ? 'text' : 'password'}
+                                    value={credential.password}
+                                    readOnly
+                                    className="text-sm w-32"
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => togglePasswordVisibility(credential.id)}
+                                  >
+                                    {showPasswords[credential.id] ? (
+                                      <EyeOff className="h-3 w-3" />
+                                    ) : (
+                                      <Eye className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => copyToClipboard(credential.password, `password-${credential.id}`)}
+                                  >
+                                    {copiedField === `password-${credential.id}` ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : (
+                                      <Copy className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                {credential.authenticator ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm">{credential.authenticator}</span>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={() => copyToClipboard(credential.authenticator!, `auth-${credential.id}`)}
+                                    >
+                                      {copiedField === `auth-${credential.id}` ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <Copy className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                              <td className="p-4">
+                                <TooltipProvider>
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex -space-x-2">
+                                      {credential.members.slice(0, 3).map((member) => (
+                                        <Tooltip key={member.id}>
+                                          <TooltipTrigger>
+                                            <Avatar className="h-6 w-6 border-2 border-background">
+                                              <AvatarFallback className="text-xs">
+                                                {member.user.name?.[0] || member.user.email[0].toUpperCase()}
+                                              </AvatarFallback>
+                                            </Avatar>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            <p>{member.user.name || member.user.email}</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      ))}
+                                      {credential.members.length > 3 && (
+                                        <div className="h-6 w-6 rounded-full bg-muted border-2 border-background flex items-center justify-center text-xs">
+                                          +{credential.members.length - 3}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <span className="text-xs text-muted-foreground">
+                                      {credential.members.length}
+                                    </span>
+                                  </div>
+                                </TooltipProvider>
+                              </td>
+                              <td className="p-4">
+                                <div className="flex gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => openEditDialog(credential)}
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleDeleteCredential(credential.id)}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </motion.tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="shared" className="space-y-4 mt-4">
+            {filteredCredentialsByTab.length === 0 ? (
+              <Card>
+                <CardContent className="py-8 text-center text-muted-foreground">
+                  No shared credentials found.
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader className="flex flex-col gap-4">
+                  <div className="flex flex-row items-center justify-between">
+                    <CardTitle>Shared Credentials</CardTitle>
+                    <div className="flex items-center gap-2">
+                      {departmentMembers.length > 0 && (
+                        <Select
+                          value={selectedDepartmentMemberId || 'all'}
+                          onValueChange={(value) => setSelectedDepartmentMemberId(value === 'all' ? null : value)}
+                        >
+                          <SelectTrigger className="w-64">
+                            <SelectValue placeholder="Filter by department member" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Members</SelectItem>
+                            {departmentMembers.map((member) => (
+                              <SelectItem key={member.id} value={member.id}>
+                                {member.name || member.email}
+                                {member.id === currentUser?.id && ' (You)'}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      <Input
+                        placeholder="Search credentials..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-64"
+                      />
+                      <Button variant="outline" onClick={handleExport}>
+                        <Download className="h-4 w-4 mr-2" />
+                        Export
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Company, Geography, Platform Filters */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
+                      <div className="relative">
+                        <Input
+                          placeholder="Select or type company..."
+                          value={companyInputValue || filterCompany}
+                          onChange={(e) => {
+                            setCompanyInputValue(e.target.value)
+                            setIsCompanyOpen(true)
+                          }}
+                          onFocus={() => setIsCompanyOpen(true)}
+                          className="w-full"
+                        />
+                        {isCompanyOpen && filteredCompanies.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            <div
+                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                              onClick={() => {
+                                setFilterCompany('')
+                                setCompanyInputValue('')
+                                setIsCompanyOpen(false)
+                              }}
+                            >
+                              Clear filter
+                            </div>
+                            {filteredCompanies.map((company) => (
+                              <div
+                                key={company}
+                                className="p-2 cursor-pointer hover:bg-accent text-sm"
+                                onClick={() => {
+                                  setFilterCompany(company)
+                                  setCompanyInputValue(company)
+                                  setIsCompanyOpen(false)
+                                }}
+                              >
+                                {company}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
+                      <div className="relative">
+                        <Input
+                          placeholder={filterCompany ? "Select or type geography..." : "Select company first"}
+                          value={geographyInputValue || filterGeography}
+                          onChange={(e) => {
+                            setGeographyInputValue(e.target.value)
+                            setIsGeographyOpen(true)
+                          }}
+                          onFocus={() => filterCompany && setIsGeographyOpen(true)}
+                          disabled={!filterCompany}
+                          className="w-full"
+                        />
+                        {isGeographyOpen && filterCompany && filteredGeographiesByInput.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            <div
+                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                              onClick={() => {
+                                setFilterGeography('')
+                                setGeographyInputValue('')
+                                setIsGeographyOpen(false)
+                              }}
+                            >
+                              Clear filter
+                            </div>
+                            {filteredGeographiesByInput.map((geography) => (
+                              <div
+                                key={geography}
+                                className="p-2 cursor-pointer hover:bg-accent text-sm"
+                                onClick={() => {
+                                  setFilterGeography(geography)
+                                  setGeographyInputValue(geography)
+                                  setIsGeographyOpen(false)
+                                }}
+                              >
+                                {geography}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
+                      <div className="relative">
+                        <Input
+                          placeholder={filterCompany && filterGeography ? "Select or type platform..." : "Select company & geography first"}
+                          value={platformInputValue || filterPlatform}
+                          onChange={(e) => {
+                            setPlatformInputValue(e.target.value)
+                            setIsPlatformOpen(true)
+                          }}
+                          onFocus={() => filterCompany && filterGeography && setIsPlatformOpen(true)}
+                          disabled={!filterCompany || !filterGeography}
+                          className="w-full"
+                        />
+                        {isPlatformOpen && filterCompany && filterGeography && filteredPlatformsByInput.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            <div
+                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                              onClick={() => {
+                                setFilterPlatform('')
+                                setPlatformInputValue('')
+                                setIsPlatformOpen(false)
+                              }}
+                            >
+                              Clear filter
+                            </div>
+                            {filteredPlatformsByInput.map((platform) => (
+                              <div
+                                key={platform}
+                                className="p-2 cursor-pointer hover:bg-accent text-sm"
+                                onClick={() => {
+                                  setFilterPlatform(platform)
+                                  setPlatformInputValue(platform)
+                                  setIsPlatformOpen(false)
+                                }}
+                              >
+                                {platform}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {(filterCompany || filterGeography || filterPlatform) && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setFilterCompany('')
+                          setFilterGeography('')
+                          setFilterPlatform('')
+                          setCompanyInputValue('')
+                          setGeographyInputValue('')
+                          setPlatformInputValue('')
+                        }}
+                        className="mt-6"
+                      >
+                        Clear Filters
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left p-4">Company</th>
+                          <th className="text-left p-4">Geography</th>
+                          <th className="text-left p-4">Platform</th>
+                          <th className="text-left p-4">Privacy</th>
+                          <th className="text-left p-4">URL</th>
+                          <th className="text-left p-4">Username</th>
+                          <th className="text-left p-4">Password</th>
+                          <th className="text-left p-4">Authenticator</th>
+                          <th className="text-left p-4">Members</th>
+                          <th className="text-left p-4">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredCredentialsByTab
+                          .filter(credential => {
+                            // Filter by company
+                            if (filterCompany && credential.company !== filterCompany) {
+                              return false
+                            }
+                            
+                            // Filter by geography
+                            if (filterGeography && credential.geography !== filterGeography) {
+                              return false
+                            }
+                            
+                            // Filter by platform
+                            if (filterPlatform && credential.platform !== filterPlatform) {
+                              return false
+                            }
+                            
+                            if (selectedDepartmentMemberId) {
+                              if (credential.privacyLevel !== 'PUBLIC' || credential.createdBy.id !== selectedDepartmentMemberId) {
+                                return false
+                              }
+                            }
+                            if (!searchQuery.trim()) return true
+                            const query = searchQuery.toLowerCase()
+                            return (
+                              credential.company.toLowerCase().includes(query) ||
+                              credential.geography.toLowerCase().includes(query) ||
+                              credential.platform.toLowerCase().includes(query) ||
+                              credential.url?.toLowerCase().includes(query) ||
+                              credential.username.toLowerCase().includes(query) ||
+                              credential.notes?.toLowerCase().includes(query)
+                            )
+                          })
+                          .map((credential) => (
+                            <motion.tr
+                              key={credential.id}
+                              initial={{ opacity: 0, y: 20 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="border-b hover:bg-accent/50"
+                            >
+                              <td className="p-4">
+                                <div className="font-medium">{credential.company}</div>
+                              </td>
+                              <td className="p-4">{credential.geography}</td>
+                              <td className="p-4">{credential.platform}</td>
+                              <td className="p-4">
+                                <div className="flex items-center gap-2">
+                                  <Switch
+                                    checked={credential.privacyLevel === 'PUBLIC'}
+                                    onCheckedChange={() => handleTogglePrivacy(credential.id, credential.privacyLevel || 'PRIVATE')}
+                                    className={
+                                      credential.privacyLevel === 'PUBLIC'
+                                        ? 'data-[state=checked]:bg-green-600'
+                                        : 'data-[state=unchecked]:bg-red-600'
+                                    }
+                                  />
+                                  <Badge 
+                                    variant={credential.privacyLevel === 'PUBLIC' ? 'default' : 'secondary'}
+                                    className={
+                                      credential.privacyLevel === 'PUBLIC' 
+                                        ? 'bg-green-100 text-green-800 hover:bg-green-200 border-green-300' 
+                                        : 'bg-red-100 text-red-800 hover:bg-red-200 border-red-300'
+                                    }
+                                  >
+                                    {credential.privacyLevel === 'PUBLIC' ? 'Public' : 'Private'}
+                                  </Badge>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                {credential.url ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm truncate max-w-[200px]">{credential.url}</span>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={() => copyToClipboard(credential.url!, `url-${credential.id}`)}
+                                    >
+                                      {copiedField === `url-${credential.id}` ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <Copy className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                              <td className="p-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm">{credential.username}</span>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => copyToClipboard(credential.username, `username-${credential.id}`)}
+                                  >
+                                    {copiedField === `username-${credential.id}` ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : (
+                                      <Copy className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type={showPasswords[credential.id] ? 'text' : 'password'}
+                                    value={credential.password}
+                                    readOnly
+                                    className="text-sm w-32"
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => togglePasswordVisibility(credential.id)}
+                                  >
+                                    {showPasswords[credential.id] ? (
+                                      <EyeOff className="h-3 w-3" />
+                                    ) : (
+                                      <Eye className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => copyToClipboard(credential.password, `password-${credential.id}`)}
+                                  >
+                                    {copiedField === `password-${credential.id}` ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : (
+                                      <Copy className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                {credential.authenticator ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm">{credential.authenticator}</span>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={() => copyToClipboard(credential.authenticator!, `auth-${credential.id}`)}
+                                    >
+                                      {copiedField === `auth-${credential.id}` ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <Copy className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                              <td className="p-4">
+                                <TooltipProvider>
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex -space-x-2">
+                                      {credential.members.slice(0, 3).map((member) => (
+                                        <Tooltip key={member.id}>
+                                          <TooltipTrigger>
+                                            <Avatar className="h-6 w-6 border-2 border-background">
+                                              <AvatarFallback className="text-xs">
+                                                {member.user.name?.[0] || member.user.email[0].toUpperCase()}
+                                              </AvatarFallback>
+                                            </Avatar>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            <p>{member.user.name || member.user.email}</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      ))}
+                                      {credential.members.length > 3 && (
+                                        <div className="h-6 w-6 rounded-full bg-muted border-2 border-background flex items-center justify-center text-xs">
+                                          +{credential.members.length - 3}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <span className="text-xs text-muted-foreground">
+                                      {credential.members.length}
+                                    </span>
+                                  </div>
+                                </TooltipProvider>
+                              </td>
+                              <td className="p-4">
+                                <div className="flex gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => openEditDialog(credential)}
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleDeleteCredential(credential.id)}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </motion.tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="department" className="space-y-4 mt-4">
+            {filteredCredentialsByTab.length === 0 ? (
+              <Card>
+                <CardContent className="py-8 text-center text-muted-foreground">
+                  No department credentials found.
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader className="flex flex-col gap-4">
+                  <div className="flex flex-row items-center justify-between">
+                    <CardTitle>Department Credentials</CardTitle>
+                    <div className="flex items-center gap-2">
+                      {departmentMembers.length > 0 && (
+                        <Select
+                          value={selectedDepartmentMemberId || 'all'}
+                          onValueChange={(value) => setSelectedDepartmentMemberId(value === 'all' ? null : value)}
+                        >
+                          <SelectTrigger className="w-64">
+                            <SelectValue placeholder="Filter by department member" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Members</SelectItem>
+                            {departmentMembers.map((member) => (
+                              <SelectItem key={member.id} value={member.id}>
+                                {member.name || member.email}
+                                {member.id === currentUser?.id && ' (You)'}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      <Input
+                        placeholder="Search credentials..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-64"
+                      />
+                      <Button variant="outline" onClick={handleExport}>
+                        <Download className="h-4 w-4 mr-2" />
+                        Export
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Company, Geography, Platform Filters */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
+                      <div className="relative">
+                        <Input
+                          placeholder="Select or type company..."
+                          value={companyInputValue || filterCompany}
+                          onChange={(e) => {
+                            setCompanyInputValue(e.target.value)
+                            setIsCompanyOpen(true)
+                          }}
+                          onFocus={() => setIsCompanyOpen(true)}
+                          className="w-full"
+                        />
+                        {isCompanyOpen && filteredCompanies.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            <div
+                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                              onClick={() => {
+                                setFilterCompany('')
+                                setCompanyInputValue('')
+                                setIsCompanyOpen(false)
+                              }}
+                            >
+                              Clear filter
+                            </div>
+                            {filteredCompanies.map((company) => (
+                              <div
+                                key={company}
+                                className="p-2 cursor-pointer hover:bg-accent text-sm"
+                                onClick={() => {
+                                  setFilterCompany(company)
+                                  setCompanyInputValue(company)
+                                  setIsCompanyOpen(false)
+                                }}
+                              >
+                                {company}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
+                      <div className="relative">
+                        <Input
+                          placeholder={filterCompany ? "Select or type geography..." : "Select company first"}
+                          value={geographyInputValue || filterGeography}
+                          onChange={(e) => {
+                            setGeographyInputValue(e.target.value)
+                            setIsGeographyOpen(true)
+                          }}
+                          onFocus={() => filterCompany && setIsGeographyOpen(true)}
+                          disabled={!filterCompany}
+                          className="w-full"
+                        />
+                        {isGeographyOpen && filterCompany && filteredGeographiesByInput.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            <div
+                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                              onClick={() => {
+                                setFilterGeography('')
+                                setGeographyInputValue('')
+                                setIsGeographyOpen(false)
+                              }}
+                            >
+                              Clear filter
+                            </div>
+                            {filteredGeographiesByInput.map((geography) => (
+                              <div
+                                key={geography}
+                                className="p-2 cursor-pointer hover:bg-accent text-sm"
+                                onClick={() => {
+                                  setFilterGeography(geography)
+                                  setGeographyInputValue(geography)
+                                  setIsGeographyOpen(false)
+                                }}
+                              >
+                                {geography}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
+                      <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
+                      <div className="relative">
+                        <Input
+                          placeholder={filterCompany && filterGeography ? "Select or type platform..." : "Select company & geography first"}
+                          value={platformInputValue || filterPlatform}
+                          onChange={(e) => {
+                            setPlatformInputValue(e.target.value)
+                            setIsPlatformOpen(true)
+                          }}
+                          onFocus={() => filterCompany && filterGeography && setIsPlatformOpen(true)}
+                          disabled={!filterCompany || !filterGeography}
+                          className="w-full"
+                        />
+                        {isPlatformOpen && filterCompany && filterGeography && filteredPlatformsByInput.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            <div
+                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
+                              onClick={() => {
+                                setFilterPlatform('')
+                                setPlatformInputValue('')
+                                setIsPlatformOpen(false)
+                              }}
+                            >
+                              Clear filter
+                            </div>
+                            {filteredPlatformsByInput.map((platform) => (
+                              <div
+                                key={platform}
+                                className="p-2 cursor-pointer hover:bg-accent text-sm"
+                                onClick={() => {
+                                  setFilterPlatform(platform)
+                                  setPlatformInputValue(platform)
+                                  setIsPlatformOpen(false)
+                                }}
+                              >
+                                {platform}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {(filterCompany || filterGeography || filterPlatform) && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setFilterCompany('')
+                          setFilterGeography('')
+                          setFilterPlatform('')
+                          setCompanyInputValue('')
+                          setGeographyInputValue('')
+                          setPlatformInputValue('')
+                        }}
+                        className="mt-6"
+                      >
+                        Clear Filters
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left p-4">Company</th>
+                          <th className="text-left p-4">Geography</th>
+                          <th className="text-left p-4">Platform</th>
+                          <th className="text-left p-4">Privacy</th>
+                          <th className="text-left p-4">URL</th>
+                          <th className="text-left p-4">Username</th>
+                          <th className="text-left p-4">Password</th>
+                          <th className="text-left p-4">Authenticator</th>
+                          <th className="text-left p-4">Members</th>
+                          <th className="text-left p-4">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredCredentialsByTab
+                          .filter(credential => {
+                            // Filter by company
+                            if (filterCompany && credential.company !== filterCompany) {
+                              return false
+                            }
+                            
+                            // Filter by geography
+                            if (filterGeography && credential.geography !== filterGeography) {
+                              return false
+                            }
+                            
+                            // Filter by platform
+                            if (filterPlatform && credential.platform !== filterPlatform) {
+                              return false
+                            }
+                            
+                            if (selectedDepartmentMemberId) {
+                              if (credential.privacyLevel !== 'PUBLIC' || credential.createdBy.id !== selectedDepartmentMemberId) {
+                                return false
+                              }
+                            }
+                            if (!searchQuery.trim()) return true
+                            const query = searchQuery.toLowerCase()
+                            return (
+                              credential.company.toLowerCase().includes(query) ||
+                              credential.geography.toLowerCase().includes(query) ||
+                              credential.platform.toLowerCase().includes(query) ||
+                              credential.url?.toLowerCase().includes(query) ||
+                              credential.username.toLowerCase().includes(query) ||
+                              credential.notes?.toLowerCase().includes(query)
+                            )
+                          })
+                          .map((credential) => (
+                            <motion.tr
+                              key={credential.id}
+                              initial={{ opacity: 0, y: 20 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="border-b hover:bg-accent/50"
+                            >
+                              <td className="p-4">
+                                <div className="font-medium">{credential.company}</div>
+                              </td>
+                              <td className="p-4">{credential.geography}</td>
+                              <td className="p-4">{credential.platform}</td>
+                              <td className="p-4">
+                                <div className="flex items-center gap-2">
+                                  <Switch
+                                    checked={credential.privacyLevel === 'PUBLIC'}
+                                    onCheckedChange={() => handleTogglePrivacy(credential.id, credential.privacyLevel || 'PRIVATE')}
+                                    className={
+                                      credential.privacyLevel === 'PUBLIC'
+                                        ? 'data-[state=checked]:bg-green-600'
+                                        : 'data-[state=unchecked]:bg-red-600'
+                                    }
+                                  />
+                                  <Badge 
+                                    variant={credential.privacyLevel === 'PUBLIC' ? 'default' : 'secondary'}
+                                    className={
+                                      credential.privacyLevel === 'PUBLIC' 
+                                        ? 'bg-green-100 text-green-800 hover:bg-green-200 border-green-300' 
+                                        : 'bg-red-100 text-red-800 hover:bg-red-200 border-red-300'
+                                    }
+                                  >
+                                    {credential.privacyLevel === 'PUBLIC' ? 'Public' : 'Private'}
+                                  </Badge>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                {credential.url ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm truncate max-w-[200px]">{credential.url}</span>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={() => copyToClipboard(credential.url!, `url-${credential.id}`)}
+                                    >
+                                      {copiedField === `url-${credential.id}` ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <Copy className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                              <td className="p-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm">{credential.username}</span>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => copyToClipboard(credential.username, `username-${credential.id}`)}
+                                  >
+                                    {copiedField === `username-${credential.id}` ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : (
+                                      <Copy className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type={showPasswords[credential.id] ? 'text' : 'password'}
+                                    value={credential.password}
+                                    readOnly
+                                    className="text-sm w-32"
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => togglePasswordVisibility(credential.id)}
+                                  >
+                                    {showPasswords[credential.id] ? (
+                                      <EyeOff className="h-3 w-3" />
+                                    ) : (
+                                      <Eye className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => copyToClipboard(credential.password, `password-${credential.id}`)}
+                                  >
+                                    {copiedField === `password-${credential.id}` ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : (
+                                      <Copy className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                {credential.authenticator ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm">{credential.authenticator}</span>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={() => copyToClipboard(credential.authenticator!, `auth-${credential.id}`)}
+                                    >
+                                      {copiedField === `auth-${credential.id}` ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <Copy className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                              <td className="p-4">
+                                <TooltipProvider>
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex -space-x-2">
+                                      {credential.members.slice(0, 3).map((member) => (
+                                        <Tooltip key={member.id}>
+                                          <TooltipTrigger>
+                                            <Avatar className="h-6 w-6 border-2 border-background">
+                                              <AvatarFallback className="text-xs">
+                                                {member.user.name?.[0] || member.user.email[0].toUpperCase()}
+                                              </AvatarFallback>
+                                            </Avatar>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            <p>{member.user.name || member.user.email}</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      ))}
+                                      {credential.members.length > 3 && (
+                                        <div className="h-6 w-6 rounded-full bg-muted border-2 border-background flex items-center justify-center text-xs">
+                                          +{credential.members.length - 3}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <span className="text-xs text-muted-foreground">
+                                      {credential.members.length}
+                                    </span>
+                                  </div>
+                                </TooltipProvider>
+                              </td>
+                              <td className="p-4">
+                                <div className="flex gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => openEditDialog(credential)}
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleDeleteCredential(credential.id)}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </motion.tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        </Tabs>
 
         {/* Bulk Collaboration Dialog */}
         <Dialog open={isBulkCollabDialogOpen} onOpenChange={handleBulkDialogChange}>
@@ -1004,26 +2816,28 @@ export default function CredentialsPage() {
                               {memberCount === 0 ? (
                                 <p className="text-sm text-muted-foreground">No collaborators yet.</p>
                               ) : (
-                                credential.members.map((member) => {
-                                  const memberKey = `${credential.id}:${member.id}`
-                                  const isRemoving = removingMemberKey === memberKey
-                                  return (
-                                    <div
-                                      key={member.id}
-                                      className="flex items-center justify-between rounded border p-2 text-sm"
-                                    >
-                                      <div>
-                                        <p className="font-medium">{member.user.name || member.user.email}</p>
-                                        <p className="text-xs text-muted-foreground capitalize">{member.role}</p>
-                                      </div>
+                                <>
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="checkbox"
+                                        className="h-4 w-4 rounded border-muted-foreground"
+                                        checked={credential.members.every(m => selectedMembersForRemoval.has(`${credential.id}:${m.id}`))}
+                                        onChange={() => selectAllMembersForCredential(credential.id, credential.members)}
+                                      />
+                                      <span className="text-xs text-muted-foreground">
+                                        Select all ({credential.members.filter(m => selectedMembersForRemoval.has(`${credential.id}:${m.id}`)).length}/{credential.members.length} selected)
+                                      </span>
+                                    </div>
+                                    {selectedMembersForRemoval.size > 0 && (
                                       <Button
                                         variant="destructive"
                                         size="sm"
                                         className="flex items-center gap-1"
-                                        onClick={() => handleRemoveMember(credential.id, member.id)}
-                                        disabled={isRemoving}
+                                        onClick={handleBulkRemoveMembers}
+                                        disabled={isBulkRemoving}
                                       >
-                                        {isRemoving ? (
+                                        {isBulkRemoving ? (
                                           <>
                                             <Loader2 className="mr-1 h-3 w-3 animate-spin" />
                                             Removing...
@@ -1031,13 +2845,90 @@ export default function CredentialsPage() {
                                         ) : (
                                           <>
                                             <Trash2 className="h-3 w-3" />
-                                            Remove
+                                            Remove Selected ({selectedMembersForRemoval.size})
                                           </>
                                         )}
                                       </Button>
-                                    </div>
-                                  )
-                                })
+                                    )}
+                                  </div>
+                                  {credential.members.map((member) => {
+                                    const memberKey = `${credential.id}:${member.id}`
+                                    const isRemoving = removingMemberKey === memberKey
+                                    const isSelected = selectedMembersForRemoval.has(memberKey)
+                                    // Get all credentials where member is collaborating
+                                    const memberCredentials = getCredentialsForMember(member.user.id)
+                                    const memberCredentialsCount = memberCredentials.length
+                                    // Count credentials where current user has permission to remove members
+                                    const removableCredentials = memberCredentials.filter(c => {
+                                      const isCreator = c.createdBy.id === currentUser?.id
+                                      const isEditor = c.members.some(m => 
+                                        m.user.id === currentUser?.id && m.role === 'editor'
+                                      )
+                                      return isCreator || isEditor
+                                    })
+                                    const removableCount = removableCredentials.length
+                                    return (
+                                      <div
+                                        key={member.id}
+                                        className={`flex items-center justify-between rounded border p-2 text-sm ${isSelected ? 'bg-primary/5 border-primary' : ''}`}
+                                      >
+                                        <div className="flex items-center gap-3 flex-1">
+                                          <input
+                                            type="checkbox"
+                                            className="h-4 w-4 rounded border-muted-foreground"
+                                            checked={isSelected}
+                                            onChange={() => toggleMemberSelectionForRemoval(memberKey)}
+                                          />
+                                          <div className="flex-1">
+                                            <div className="flex items-center gap-2">
+                                              <p className="font-medium">{member.user.name || member.user.email}</p>
+                                              {memberCredentialsCount > 1 && (
+                                                <Badge variant="outline" className="text-xs">
+                                                  {memberCredentialsCount} credential{memberCredentialsCount > 1 ? 's' : ''}
+                                                </Badge>
+                                              )}
+                                            </div>
+                                            <p className="text-xs text-muted-foreground capitalize">{member.role}</p>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          {memberCredentialsCount > 1 && removableCount > 0 && (
+                                            <Button
+                                              variant="destructive"
+                                              size="sm"
+                                              className="flex items-center gap-1 text-xs"
+                                              onClick={() => handleRemoveMemberFromAllCredentials(member.user.id, member.user.name || member.user.email)}
+                                              disabled={isBulkRemoving}
+                                              title={`Remove from ${removableCount} credential${removableCount > 1 ? 's' : ''} where you have permission`}
+                                            >
+                                              <Trash2 className="h-3 w-3" />
+                                              Remove from All ({removableCount})
+                                            </Button>
+                                          )}
+                                          <Button
+                                            variant="destructive"
+                                            size="sm"
+                                            className="flex items-center gap-1"
+                                            onClick={() => handleRemoveMember(credential.id, member.id)}
+                                            disabled={isRemoving || isBulkRemoving}
+                                          >
+                                            {isRemoving ? (
+                                              <>
+                                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                                Removing...
+                                              </>
+                                            ) : (
+                                              <>
+                                                <Trash2 className="h-3 w-3" />
+                                                Remove
+                                              </>
+                                            )}
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </>
                               )}
                             </div>
                           )}

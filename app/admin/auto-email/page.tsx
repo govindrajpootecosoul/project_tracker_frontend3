@@ -12,18 +12,24 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, Save, ArrowLeft, Plus, X } from 'lucide-react'
+import { Loader2, Save, ArrowLeft, Plus, X, Trash2, Check } from 'lucide-react'
 import { DepartmentDto } from '@/lib/api'
+
+interface DepartmentConfig {
+  department: string
+  enabled: boolean
+  daysOfWeek: number[]
+  timeOfDay: string
+  lastRunAt?: string | null
+}
 
 interface AutoEmailConfig {
   id?: string
   enabled: boolean
   toEmails: string[]
-  departments: string[]
-  daysOfWeek: number[]
-  timeOfDay: string
   timezone: string
   sendWhenEmpty: boolean
+  departmentConfigs: DepartmentConfig[]
   lastRunAt?: string | null
 }
 
@@ -44,16 +50,14 @@ export default function AutoEmailConfigPage() {
   const [config, setConfig] = useState<AutoEmailConfig>({
     enabled: false,
     toEmails: ['priyanka.aeron@ecosoulhome.com', 'charu.anand@ecosoulhome.com'],
-    departments: [],
-    daysOfWeek: [],
-    timeOfDay: '18:00',
     timezone: 'Asia/Kolkata',
     sendWhenEmpty: false,
+    departmentConfigs: [],
   })
-  const [newEmail, setNewEmail] = useState('')
   const [departments, setDepartments] = useState<DepartmentDto[]>([])
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [newEmail, setNewEmail] = useState('')
 
   useEffect(() => {
     const checkAccess = async () => {
@@ -94,6 +98,10 @@ export default function AutoEmailConfigPage() {
       if (!configData.toEmails || configData.toEmails.length === 0) {
         configData.toEmails = ['priyanka.aeron@ecosoulhome.com', 'charu.anand@ecosoulhome.com']
       }
+      // Ensure departmentConfigs exists
+      if (!configData.departmentConfigs) {
+        configData.departmentConfigs = []
+      }
       setConfig(configData)
     } catch (error: any) {
       console.error('Failed to load config:', error)
@@ -128,17 +136,22 @@ export default function AutoEmailConfigPage() {
         setError(`Invalid email format: ${invalidEmails.join(', ')}`)
         return
       }
-      if (config.departments.length === 0) {
-        setError('Please select at least one department when enabled')
+      if (config.departmentConfigs.length === 0) {
+        setError('Please add at least one department configuration when enabled')
         return
       }
-      if (config.daysOfWeek.length === 0) {
-        setError('Please select at least one day of week when enabled')
-        return
-      }
-      if (!config.timeOfDay || !/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/.test(config.timeOfDay)) {
-        setError('Please enter a valid time in HH:MM format (e.g., 18:00)')
-        return
+      // Validate each department config
+      for (const deptConfig of config.departmentConfigs) {
+        if (deptConfig.enabled) {
+          if (deptConfig.daysOfWeek.length === 0) {
+            setError(`Department ${deptConfig.department}: Please select at least one day of week when enabled`)
+            return
+          }
+          if (!deptConfig.timeOfDay || !/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/.test(deptConfig.timeOfDay)) {
+            setError(`Department ${deptConfig.department}: Please enter a valid time in HH:MM format (e.g., 18:00)`)
+            return
+          }
+        }
       }
     }
 
@@ -147,7 +160,13 @@ export default function AutoEmailConfigPage() {
     setSuccess(null)
 
     try {
-      await apiClient.updateAutoEmailConfig(config)
+      await apiClient.updateAutoEmailConfig({
+        enabled: config.enabled,
+        toEmails: config.toEmails,
+        timezone: config.timezone,
+        sendWhenEmpty: config.sendWhenEmpty,
+        departmentConfigs: config.departmentConfigs,
+      })
       setSuccess('Configuration saved successfully!')
       await loadConfig() // Reload to get updated lastRunAt
     } catch (error: any) {
@@ -156,36 +175,6 @@ export default function AutoEmailConfigPage() {
     } finally {
       setSaving(false)
     }
-  }
-
-  const toggleDay = (day: number) => {
-    setConfig((prev) => ({
-      ...prev,
-      daysOfWeek: prev.daysOfWeek.includes(day)
-        ? prev.daysOfWeek.filter((d) => d !== day)
-        : [...prev.daysOfWeek, day].sort(),
-    }))
-  }
-
-  const selectWeekdays = () => {
-    setConfig((prev) => ({
-      ...prev,
-      daysOfWeek: [1, 2, 3, 4, 5], // Mon-Fri
-    }))
-  }
-
-  const selectAllDays = () => {
-    setConfig((prev) => ({
-      ...prev,
-      daysOfWeek: [0, 1, 2, 3, 4, 5, 6], // All days
-    }))
-  }
-
-  const clearDays = () => {
-    setConfig((prev) => ({
-      ...prev,
-      daysOfWeek: [],
-    }))
   }
 
   const addEmail = () => {
@@ -225,22 +214,69 @@ export default function AutoEmailConfigPage() {
     }
   }
 
-  const getConfigSummary = () => {
-    if (!config.enabled) {
-      return 'Automatic emails are disabled'
+  const addDepartment = (departmentName: string) => {
+    // Check if department already exists
+    if (config.departmentConfigs.some((dc) => dc.department === departmentName)) {
+      setError(`Department ${departmentName} is already configured`)
+      return
     }
 
-    const dayLabels = config.daysOfWeek
-      .sort()
-      .map((d) => DAYS_OF_WEEK.find((day) => day.value === d)?.label)
-      .filter(Boolean)
-      .join(', ')
+    setConfig((prev) => ({
+      ...prev,
+      departmentConfigs: [
+        ...prev.departmentConfigs,
+        {
+          department: departmentName,
+          enabled: true,
+          daysOfWeek: [1, 2, 3, 4, 5], // Default to weekdays
+          timeOfDay: '18:00',
+        },
+      ],
+    }))
+    setError(null)
+  }
 
-    const deptNames = config.departments.length > 0
-      ? config.departments.join(', ')
-      : 'No departments selected'
+  const removeDepartment = (departmentName: string) => {
+    setConfig((prev) => ({
+      ...prev,
+      departmentConfigs: prev.departmentConfigs.filter((dc) => dc.department !== departmentName),
+    }))
+  }
 
-    return `Emails scheduled for ${dayLabels || 'no days'} at ${config.timeOfDay} (${config.timezone}) for departments: ${deptNames}`
+  const updateDepartmentConfig = (departmentName: string, updates: Partial<DepartmentConfig>) => {
+    setConfig((prev) => ({
+      ...prev,
+      departmentConfigs: prev.departmentConfigs.map((dc) =>
+        dc.department === departmentName ? { ...dc, ...updates } : dc
+      ),
+    }))
+  }
+
+  const toggleDay = (departmentName: string, day: number) => {
+    const deptConfig = config.departmentConfigs.find((dc) => dc.department === departmentName)
+    if (!deptConfig) return
+
+    const newDays = deptConfig.daysOfWeek.includes(day)
+      ? deptConfig.daysOfWeek.filter((d) => d !== day)
+      : [...deptConfig.daysOfWeek, day].sort()
+
+    updateDepartmentConfig(departmentName, { daysOfWeek: newDays })
+  }
+
+  const selectWeekdays = (departmentName: string) => {
+    updateDepartmentConfig(departmentName, { daysOfWeek: [1, 2, 3, 4, 5] })
+  }
+
+  const selectAllDays = (departmentName: string) => {
+    updateDepartmentConfig(departmentName, { daysOfWeek: [0, 1, 2, 3, 4, 5, 6] })
+  }
+
+  const clearDays = (departmentName: string) => {
+    updateDepartmentConfig(departmentName, { daysOfWeek: [] })
+  }
+
+  const isDepartmentConfigured = (deptName: string) => {
+    return config.departmentConfigs.some((dc) => dc.department === deptName)
   }
 
   if (loading) {
@@ -255,7 +291,7 @@ export default function AutoEmailConfigPage() {
 
   return (
     <MainLayout>
-      <div className="container mx-auto py-8 max-w-4xl">
+      <div className="container mx-auto py-8 max-w-6xl">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -267,7 +303,7 @@ export default function AutoEmailConfigPage() {
           </Button>
           <h1 className="text-3xl font-bold">Manage Auto Send Mail</h1>
           <p className="text-muted-foreground mt-2">
-            Configure automatic department-wise task email sending
+            Configure automatic department-wise task email sending with per-department schedules
           </p>
         </div>
 
@@ -275,7 +311,7 @@ export default function AutoEmailConfigPage() {
           <CardHeader>
             <CardTitle>Auto Email Configuration</CardTitle>
             <CardDescription>
-              Configure when and how automatic department-wise task emails are sent
+              Configure when and how automatic department-wise task emails are sent. Each department can have its own schedule.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -298,7 +334,7 @@ export default function AutoEmailConfigPage() {
                   Enable automatic department-wise task email
                 </Label>
                 <p className="text-sm text-muted-foreground mt-1">
-                  When enabled, emails will be sent automatically based on the schedule below
+                  When enabled, emails will be sent automatically based on each department's schedule below
                 </p>
               </div>
               <Switch
@@ -314,7 +350,7 @@ export default function AutoEmailConfigPage() {
             <div className="space-y-2">
               <Label>Email Recipients (To) *</Label>
               <p className="text-sm text-muted-foreground">
-                Add email addresses that will receive the automatic emails
+                Add email addresses that will receive all automatic emails
               </p>
               <div className="flex gap-2">
                 <Input
@@ -359,141 +395,29 @@ export default function AutoEmailConfigPage() {
                   ))}
                 </div>
               )}
-              {config.toEmails.length === 0 && (
-                <p className="text-sm text-muted-foreground italic">
-                  No recipients added. Add at least one email address.
-                </p>
-              )}
             </div>
 
-            {/* Departments Selection */}
+            {/* Timezone */}
             <div className="space-y-2">
-              <Label>Departments to include *</Label>
-              <p className="text-sm text-muted-foreground">
-                Select departments whose tasks will be included in the email
-              </p>
-              <div className="border rounded-md p-4 max-h-64 overflow-y-auto">
-                {departments.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No departments available</p>
-                ) : (
-                  <div className="space-y-2">
-                    {departments.map((dept) => {
-                      const deptName = typeof dept === 'string' ? dept : dept.name
-                      return (
-                        <div key={deptName} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={`dept-${deptName}`}
-                            checked={config.departments.includes(deptName)}
-                            onCheckedChange={(checked) => {
-                              setConfig((prev) => ({
-                                ...prev,
-                                departments: checked
-                                  ? [...prev.departments, deptName]
-                                  : prev.departments.filter((d) => d !== deptName),
-                              }))
-                            }}
-                          />
-                          <Label
-                            htmlFor={`dept-${deptName}`}
-                            className="text-sm font-normal cursor-pointer"
-                          >
-                            {deptName}
-                          </Label>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Days of Week Selection */}
-            <div className="space-y-2">
-              <Label>Days of week *</Label>
-              <p className="text-sm text-muted-foreground">
-                Select which days of the week to send emails
-              </p>
-              <div className="flex gap-2 mb-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={selectWeekdays}
-                >
-                  Weekdays (Mon-Fri)
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={selectAllDays}
-                >
-                  All Days
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={clearDays}
-                >
-                  Clear
-                </Button>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {DAYS_OF_WEEK.map((day) => (
-                  <div key={day.value} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={`day-${day.value}`}
-                      checked={config.daysOfWeek.includes(day.value)}
-                      onCheckedChange={() => toggleDay(day.value)}
-                    />
-                    <Label
-                      htmlFor={`day-${day.value}`}
-                      className="text-sm font-normal cursor-pointer"
-                    >
-                      {day.label}
-                    </Label>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Time Selection */}
-            <div className="space-y-2">
-              <Label htmlFor="timeOfDay">Send email at *</Label>
-              <p className="text-sm text-muted-foreground">
-                Time in 24-hour format (HH:MM)
-              </p>
-              <div className="flex gap-4">
-                <Input
-                  id="timeOfDay"
-                  type="time"
-                  value={config.timeOfDay}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, timeOfDay: e.target.value }))
-                  }
-                  className="w-32"
-                  disabled={!config.enabled}
-                />
-                <Select
-                  value={config.timezone}
-                  onValueChange={(value) =>
-                    setConfig((prev) => ({ ...prev, timezone: value }))
-                  }
-                  disabled={!config.enabled}
-                >
-                  <SelectTrigger className="w-48">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Asia/Kolkata">Asia/Kolkata (IST)</SelectItem>
-                    <SelectItem value="UTC">UTC</SelectItem>
-                    <SelectItem value="America/New_York">America/New_York (EST)</SelectItem>
-                    <SelectItem value="America/Los_Angeles">America/Los_Angeles (PST)</SelectItem>
-                    <SelectItem value="Europe/London">Europe/London (GMT)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <Label htmlFor="timezone">Timezone</Label>
+              <Select
+                value={config.timezone}
+                onValueChange={(value) =>
+                  setConfig((prev) => ({ ...prev, timezone: value }))
+                }
+                disabled={!config.enabled}
+              >
+                <SelectTrigger className="w-64">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Asia/Kolkata">Asia/Kolkata (IST)</SelectItem>
+                  <SelectItem value="UTC">UTC</SelectItem>
+                  <SelectItem value="America/New_York">America/New_York (EST)</SelectItem>
+                  <SelectItem value="America/Los_Angeles">America/Los_Angeles (PST)</SelectItem>
+                  <SelectItem value="Europe/London">Europe/London (GMT)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Send When Empty */}
@@ -503,7 +427,7 @@ export default function AutoEmailConfigPage() {
                   Send email even if there are no tasks
                 </Label>
                 <p className="text-sm text-muted-foreground mt-1">
-                  When enabled, emails will be sent even when no tasks are found for selected departments
+                  When enabled, emails will be sent even when no tasks are found
                 </p>
               </div>
               <Switch
@@ -516,19 +440,170 @@ export default function AutoEmailConfigPage() {
               />
             </div>
 
-            {/* Configuration Summary */}
-            <div className="p-4 bg-muted rounded-lg">
-              <Label className="text-sm font-semibold">Current Configuration:</Label>
-              <p className="text-sm text-muted-foreground mt-1">{getConfigSummary()}</p>
-              {config.lastRunAt && (
-                <p className="text-xs text-muted-foreground mt-2">
-                  Last automatic send: {new Date(config.lastRunAt).toLocaleString()}
+            {/* Department Configurations */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <Label className="text-base font-semibold">Department Configurations *</Label>
+                {departments.length > 0 && (
+                  <Select
+                    onValueChange={(value) => {
+                      // Only add if not already configured
+                      if (!isDepartmentConfigured(value)) {
+                        addDepartment(value)
+                      }
+                    }}
+                    disabled={!config.enabled}
+                  >
+                    <SelectTrigger className="w-64">
+                      <SelectValue placeholder="Add Department..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {departments.map((dept) => {
+                        const deptName = typeof dept === 'string' ? dept : dept.name
+                        const isConfigured = isDepartmentConfigured(deptName)
+                        return (
+                          <SelectItem 
+                            key={deptName} 
+                            value={deptName}
+                            disabled={isConfigured}
+                            className={isConfigured ? 'opacity-60 cursor-not-allowed' : ''}
+                          >
+                            <div className="flex items-center gap-2">
+                              {isConfigured && <Check className="h-4 w-4 text-green-600" />}
+                              <span>{deptName}</span>
+                              {isConfigured && <span className="text-xs text-muted-foreground ml-auto">(Already added)</span>}
+                            </div>
+                          </SelectItem>
+                        )
+                      })}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Configure schedule for each department. Each department will receive a separate email at its configured time.
+              </p>
+
+              {config.departmentConfigs.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic p-4 border rounded-md">
+                  No departments configured. Add a department to configure its schedule.
                 </p>
+              ) : (
+                <div className="space-y-4">
+                  {config.departmentConfigs.map((deptConfig) => (
+                    <Card key={deptConfig.department} className="border-2">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-lg">{deptConfig.department}</CardTitle>
+                          <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-2">
+                              <Label htmlFor={`enabled-${deptConfig.department}`} className="text-sm">
+                                Enabled
+                              </Label>
+                              <Switch
+                                id={`enabled-${deptConfig.department}`}
+                                checked={deptConfig.enabled}
+                                onCheckedChange={(checked) =>
+                                  updateDepartmentConfig(deptConfig.department, { enabled: checked })
+                                }
+                                disabled={!config.enabled}
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeDepartment(deptConfig.department)}
+                              disabled={!config.enabled}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-600" />
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        {/* Days of Week */}
+                        <div className="space-y-2">
+                          <Label>Days of week *</Label>
+                          <div className="flex gap-2 mb-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => selectWeekdays(deptConfig.department)}
+                              disabled={!config.enabled || !deptConfig.enabled}
+                            >
+                              Weekdays
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => selectAllDays(deptConfig.department)}
+                              disabled={!config.enabled || !deptConfig.enabled}
+                            >
+                              All Days
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => clearDays(deptConfig.department)}
+                              disabled={!config.enabled || !deptConfig.enabled}
+                            >
+                              Clear
+                            </Button>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            {DAYS_OF_WEEK.map((day) => (
+                              <div key={day.value} className="flex items-center space-x-2">
+                                <Checkbox
+                                  id={`day-${deptConfig.department}-${day.value}`}
+                                  checked={deptConfig.daysOfWeek.includes(day.value)}
+                                  onCheckedChange={() => toggleDay(deptConfig.department, day.value)}
+                                  disabled={!config.enabled || !deptConfig.enabled}
+                                />
+                                <Label
+                                  htmlFor={`day-${deptConfig.department}-${day.value}`}
+                                  className="text-sm font-normal cursor-pointer"
+                                >
+                                  {day.label}
+                                </Label>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Time Selection */}
+                        <div className="space-y-2">
+                          <Label htmlFor={`time-${deptConfig.department}`}>Send email at *</Label>
+                          <Input
+                            id={`time-${deptConfig.department}`}
+                            type="time"
+                            value={deptConfig.timeOfDay}
+                            onChange={(e) =>
+                              updateDepartmentConfig(deptConfig.department, { timeOfDay: e.target.value })
+                            }
+                            className="w-32"
+                            disabled={!config.enabled || !deptConfig.enabled}
+                          />
+                        </div>
+
+                        {/* Last Run Info */}
+                        {deptConfig.lastRunAt && (
+                          <p className="text-xs text-muted-foreground">
+                            Last sent: {new Date(deptConfig.lastRunAt).toLocaleString()}
+                          </p>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
               )}
             </div>
 
             {/* Save Button */}
-            <div className="flex justify-end">
+            <div className="flex justify-end pt-4 border-t">
               <Button onClick={handleSave} disabled={saving}>
                 {saving ? (
                   <>
@@ -549,17 +624,19 @@ export default function AutoEmailConfigPage() {
         {/* Info Card */}
         <Card className="mt-6">
           <CardHeader>
-            <CardTitle>Email Recipients Information</CardTitle>
+            <CardTitle>How It Works</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Automatic emails are sent <strong>To:</strong> the email addresses configured above.
-              All employees from the selected departments are automatically included in <strong>CC</strong>.
-            </p>
+            <ul className="text-sm text-muted-foreground space-y-2 list-disc list-inside">
+              <li>Each department can have its own schedule (days and time)</li>
+              <li>Each department receives a <strong>separate email</strong> with only its own tasks</li>
+              <li>All emails are sent <strong>To:</strong> the configured recipient emails</li>
+              <li>Each email includes only employees from that specific department in <strong>CC</strong></li>
+              <li>If 4 departments are configured, 4 separate emails will be sent (one per department)</li>
+            </ul>
           </CardContent>
         </Card>
       </div>
     </MainLayout>
   )
 }
-

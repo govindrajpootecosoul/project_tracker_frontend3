@@ -12,8 +12,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Mail, Send, CheckCircle2, Clock, AlertCircle, UserPlus, Search, Pencil, Trash2, Loader2, Settings, PlusCircle } from 'lucide-react'
+import { TeamMemberListSkeleton } from '@/components/skeletons/team-skeleton'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 
@@ -181,6 +182,7 @@ export default function TeamPage() {
   const [searchInput, setSearchInput] = useState('') // User input
   const [searchQuery, setSearchQuery] = useState('') // Debounced search query
   const [isRefreshing, setIsRefreshing] = useState<boolean>(!lastTeamMembersSnapshot)
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(!lastTeamMembersSnapshot)
   const [emailForm, setEmailForm] = useState({
     to: '',
     cc: '',
@@ -302,15 +304,16 @@ export default function TeamPage() {
     const canUseCache = !options?.force && !trimmedSearch
 
     const applyData = (data: TeamMember[]) => {
-      lastTeamMembersSnapshot = data
+      const membersArray = Array.isArray(data) ? data : []
+      lastTeamMembersSnapshot = membersArray
       // Store all members for client-side filtering when fetching all departments or no filter
       if (!trimmedSearch && (debouncedDepartment === 'all' || !params.department || params.department === 'all')) {
-        setAllTeamMembers(data)
+        setAllTeamMembers(membersArray)
       }
-      setTeamMembers(data)
+      setTeamMembers(membersArray)
       if (!trimmedSearch) {
         teamMembersCacheStore[cacheKey] = {
-          data,
+          data: membersArray,
           timestamp: Date.now(),
         }
       }
@@ -323,9 +326,12 @@ export default function TeamPage() {
         applyData(cached.data)
         setIsRefreshing(true)
         apiClient
-          .getTeamMembers(params, false)
+          .getTeamMembers({ ...params, limit: 1000, skip: 0 }, false)
           .then((data) => {
-            const members = data as TeamMember[]
+            // Handle new paginated response format
+            const members = Array.isArray(data)
+              ? data
+              : (data as any)?.members || []
             teamMembersCacheStore[cacheKey] = {
               data: members,
               timestamp: Date.now(),
@@ -346,10 +352,16 @@ export default function TeamPage() {
       if (trimmedSearch) {
         setSearchLoading(true)
       } else {
+        if (!lastTeamMembersSnapshot) {
+          setIsInitialLoading(true)
+        }
         setIsRefreshing(true)
       }
-      const data = await apiClient.getTeamMembers(params, !options?.force && !trimmedSearch)
-      const members = data as TeamMember[]
+      const data = await apiClient.getTeamMembers({ ...params, limit: 1000, skip: 0 }, !options?.force && !trimmedSearch)
+      // Handle new paginated response format
+      const members = Array.isArray(data)
+        ? data
+        : (data as any)?.members || []
       applyData(members)
     } catch (error) {
       console.error('Failed to fetch team members:', error)
@@ -358,6 +370,7 @@ export default function TeamPage() {
         setSearchLoading(false)
       } else {
         setIsRefreshing(false)
+        setIsInitialLoading(false)
       }
     }
   }, [searchQuery, isSuperAdmin, debouncedDepartment, userDepartment])
@@ -382,17 +395,20 @@ export default function TeamPage() {
 
   // Keep department list in sync with member departments so dropdown always includes their current dept
   useEffect(() => {
-    if (departments.length === 0 && teamMembers.length === 0) return
-    const memberDepartments = teamMembers.map((m) => m.department || null)
+    const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+    if (departments.length === 0 && membersArray.length === 0) return
+    const memberDepartments = membersArray.map((m) => m.department || null)
     setDepartments((prev) => mergeDepartmentOptions(prev, memberDepartments))
   }, [teamMembers, departments.length])
 
   // Pre-select department dropdowns for members once data is loaded
   useEffect(() => {
-    if (!teamMembers || teamMembers.length === 0) return
+    const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+    if (!membersArray || membersArray.length === 0) return
     setMemberDepartmentSelection((prev) => {
       const next = { ...prev }
-      teamMembers.forEach((member) => {
+      const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+      membersArray.forEach((member) => {
         if (next[member.id] === undefined) {
           next[member.id] = member.department || NO_DEPARTMENT_VALUE
         }
@@ -436,7 +452,8 @@ export default function TeamPage() {
     }
     
     // Check actual member counts from teamMembers
-    const members = teamMembers.filter(m => 
+    const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+    const members = membersArray.filter(m => 
       (m.department || '').trim().toLowerCase() === dept.name.trim().toLowerCase()
     )
     const actualUserCount = members.length || dept.userCount || 0
@@ -520,15 +537,19 @@ export default function TeamPage() {
     try {
       await apiClient.updateMemberDepartment(userId, normalized || null)
       // Update local state immediately for better UX
-      setTeamMembers(prev => prev.map(m => 
-        m.id === userId ? { ...m, department: normalized || undefined } : m
-      ))
+      setTeamMembers(prev => {
+        const prevArray = Array.isArray(prev) ? prev : []
+        return prevArray.map(m => 
+          m.id === userId ? { ...m, department: normalized || undefined } : m
+        )
+      })
       await fetchTeamMembers({ force: true })
       await fetchDepartments()
     } catch (error: any) {
       console.error('Failed to update member department:', error)
       // Revert selection on error
-      const member = teamMembers.find(m => m.id === userId)
+      const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+      const member = membersArray.find(m => m.id === userId)
       setMemberDepartmentSelection(prev => ({ 
         ...prev, 
         [userId]: member?.department || NO_DEPARTMENT_VALUE 
@@ -544,9 +565,10 @@ export default function TeamPage() {
   const filteredTeamMembers = useMemo(() => {
     // Try to get cached "all" members from cache store if state doesn't have them
     const allMembersCache = teamMembersCacheStore[getTeamMembersCacheKey('all', '')]
-    const availableAllMembers = allTeamMembers.length > 0 
-      ? allTeamMembers 
-      : (allMembersCache?.data || [])
+    const allMembersArray = Array.isArray(allTeamMembers) ? allTeamMembers : []
+    const availableAllMembers = allMembersArray.length > 0 
+      ? allMembersArray 
+      : (Array.isArray(allMembersCache?.data) ? allMembersCache.data : [])
     
     // If we have all members (from state or cache) and user is filtering by department, filter client-side for instant updates
     if (selectedDepartment !== 'all' && availableAllMembers.length > 0 && !searchQuery.trim()) {
@@ -563,12 +585,15 @@ export default function TeamPage() {
       return availableAllMembers
     }
     // Otherwise use the server-filtered results
-    return teamMembers
+    const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+    return membersArray
   }, [allTeamMembers, teamMembers, selectedDepartment, searchQuery])
 
   // Use filtered members for display (instant client-side filtering)
   const displayMembers = useMemo(() => {
-    let members = searchQuery.trim() ? teamMembers : filteredTeamMembers
+    const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+    const filteredArray = Array.isArray(filteredTeamMembers) ? filteredTeamMembers : []
+    let members = searchQuery.trim() ? membersArray : filteredArray
     
     // Apply additional client-side filtering to ensure search + department filter work together
     if (searchQuery.trim() && selectedDepartment !== 'all') {
@@ -585,7 +610,8 @@ export default function TeamPage() {
   // Departments that have at least one member (for the filter dropdown)
   const departmentsWithMembers = useMemo(() => {
     const counts: Record<string, number> = {}
-    teamMembers.forEach((m) => {
+    const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+    membersArray.forEach((m) => {
       const key = (m.department || '').trim().toLowerCase()
       if (!key) return
       counts[key] = (counts[key] || 0) + 1
@@ -601,7 +627,8 @@ export default function TeamPage() {
 
   const departmentMembersMap = useMemo(() => {
     const map: Record<string, TeamMember[]> = {}
-    teamMembers.forEach((member) => {
+    const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+    membersArray.forEach((member) => {
       const key = (member.department || '').trim().toLowerCase()
       if (!map[key]) map[key] = []
       map[key].push(member)
@@ -675,7 +702,8 @@ export default function TeamPage() {
       return cachedMembers
     }
 
-    const fallbackMembers = teamMembers.filter((member) => (member.department || '').toLowerCase() === cacheKey)
+    const membersArray = Array.isArray(teamMembers) ? teamMembers : []
+    const fallbackMembers = membersArray.filter((member) => (member.department || '').toLowerCase() === cacheKey)
     if (fallbackMembers.length > 0) {
       departmentMembersCacheRef.current[cacheKey] = fallbackMembers
       applyDepartmentMembersForLeave(fallbackMembers)
@@ -1113,21 +1141,55 @@ export default function TeamPage() {
                 </div>
               </CardContent>
             </Card>
-            {searchLoading ? (
-              <Card>
-                <CardContent className="py-8 text-center text-muted-foreground">
-                  <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-                  Fetching team members...
-                </CardContent>
-              </Card>
-            ) : displayMembers.length === 0 ? (
-              <Card>
-                <CardContent className="py-8 text-center text-muted-foreground">
-                  {searchQuery ? 'No team members found matching your search.' : 'No team members found.'}
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="space-y-4 relative">
+            <AnimatePresence mode="wait">
+              {isInitialLoading ? (
+                <motion.div
+                  key="skeleton"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <TeamMemberListSkeleton count={6} />
+                </motion.div>
+              ) : searchLoading ? (
+                <motion.div
+                  key="loading"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <Card>
+                    <CardContent className="py-8 text-center text-muted-foreground">
+                      <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                      Fetching team members...
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ) : displayMembers.length === 0 ? (
+                <motion.div
+                  key="empty"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <Card>
+                    <CardContent className="py-8 text-center text-muted-foreground">
+                      {searchQuery ? 'No team members found matching your search.' : 'No team members found.'}
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="content"
+                  className="space-y-4 relative"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
                 <Card>
                   <CardHeader>
                     <CardTitle>
@@ -1148,19 +1210,19 @@ export default function TeamPage() {
                         </div>
                       </div>
                     )}
-                    <div className="overflow-x-auto">
-                      <table className="w-full">
+                    <div className="overflow-x-auto -mx-4 px-4">
+                      <table className="w-full min-w-[1200px]">
                         <thead>
                           <tr className="border-b">
-                            <th className="text-left p-4">Team Member</th>
-                            <th className="text-left p-4">Department</th>
-                            <th className="text-left p-4">Role</th>
-                            <th className="text-left p-4">Tasks Assigned</th>
-                            <th className="text-left p-4">Projects Involved</th>
-                            <th className="text-left p-4">Status Summary</th>
-                            <th className="text-left p-4">Credential Access</th>
-                            <th className="text-left p-4">Subscription Access</th>
-                            {isAdmin && <th className="text-left p-4">Actions</th>}
+                            <th className="text-left p-2 text-sm font-medium">Team Member</th>
+                            <th className="text-left p-2 text-sm font-medium">Department</th>
+                            <th className="text-left p-2 text-sm font-medium">Role</th>
+                            <th className="text-left p-2 text-sm font-medium">Tasks</th>
+                            <th className="text-left p-2 text-sm font-medium">Projects</th>
+                            <th className="text-left p-2 text-sm font-medium">Status</th>
+                            <th className="text-left p-2 text-sm font-medium">Credential</th>
+                            <th className="text-left p-2 text-sm font-medium">Subscription</th>
+                            {isAdmin && <th className="text-left p-2 text-sm font-medium">Actions</th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -1172,13 +1234,13 @@ export default function TeamPage() {
                               transition={{ duration: 0.2 }}
                               className="border-b hover:bg-accent/50"
                             >
-                              <td className="p-4">
+                              <td className="p-2">
                                 <div>
-                                  <div className="font-medium">{member.name || member.email}</div>
-                                  <div className="text-sm text-muted-foreground">{member.email}</div>
+                                  <div className="font-medium text-sm">{member.name || member.email}</div>
+                                  <div className="text-xs text-muted-foreground truncate max-w-[200px]">{member.email}</div>
                                 </div>
                               </td>
-                              <td className="p-4">
+                              <td className="p-2">
                                 {isAdmin ? (
                                   <div className="flex items-center gap-2">
                                     <Select
@@ -1211,30 +1273,30 @@ export default function TeamPage() {
                                   <span className="text-muted-foreground">-</span>
                                 )}
                               </td>
-                              <td className="p-4">
-                                <Badge variant="secondary">{formatRoleLabel(member.role)}</Badge>
+                              <td className="p-2">
+                                <Badge variant="secondary" className="text-xs">{formatRoleLabel(member.role)}</Badge>
                               </td>
-                              <td className="p-4">{member.tasksAssigned}</td>
-                              <td className="p-4">{member.projectsInvolved}</td>
-                              <td className="p-4">
-                                <div className="flex gap-2">
-                                  <Badge variant="outline" className="flex items-center gap-1">
+                              <td className="p-2 text-sm">{member.tasksAssigned}</td>
+                              <td className="p-2 text-sm">{member.projectsInvolved}</td>
+                              <td className="p-2">
+                                <div className="flex gap-1 flex-wrap">
+                                  <Badge variant="outline" className="flex items-center gap-1 text-xs">
                                     <Clock className="h-3 w-3" />
                                     {member.statusSummary.inProgress}
                                   </Badge>
-                                  <Badge variant="outline" className="flex items-center gap-1">
+                                  <Badge variant="outline" className="flex items-center gap-1 text-xs">
                                     <CheckCircle2 className="h-3 w-3" />
                                     {member.statusSummary.completed}
                                   </Badge>
-                                  <Badge variant="outline" className="flex items-center gap-1">
+                                  <Badge variant="outline" className="flex items-center gap-1 text-xs">
                                     <AlertCircle className="h-3 w-3" />
                                     {member.statusSummary.onHold}
                                   </Badge>
                                 </div>
                               </td>
-                              <td className="p-4">
+                              <td className="p-2">
                                 {isAdmin ? (
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-1">
                                     <Switch
                                       checked={member.hasCredentialAccess || false}
                                       onCheckedChange={async (checked) => {
@@ -1248,24 +1310,24 @@ export default function TeamPage() {
                                       }}
                                       disabled={member.id === currentUserId}
                                     />
-                                    <span className="text-sm text-muted-foreground">
+                                    <span className="text-xs text-muted-foreground">
                                       {member.hasCredentialAccess ? 'Yes' : 'No'}
                                     </span>
                                   </div>
                                 ) : (
                                   member.hasCredentialAccess ? (
-                                    <Badge variant="default" className="bg-green-600">
+                                    <Badge variant="default" className="bg-green-600 text-xs">
                                       <CheckCircle2 className="h-3 w-3 mr-1" />
                                       Yes
                                     </Badge>
                                   ) : (
-                                    <Badge variant="outline" className="text-muted-foreground">
+                                    <Badge variant="outline" className="text-muted-foreground text-xs">
                                       No
                                     </Badge>
                                   )
                                 )}
                               </td>
-                              <td className="p-4">
+                              <td className="p-2">
                                 {isAdmin ? (
                                   <div className="flex items-center gap-2">
                                     <Switch
@@ -1302,7 +1364,7 @@ export default function TeamPage() {
                                 )}
                               </td>
                               {isAdmin && (
-                                <td className="p-4">
+                                <td className="p-2">
                                   <div className="flex flex-wrap items-center gap-1">
                                     {isSuperAdmin ? (
                                       <Button
@@ -1359,8 +1421,9 @@ export default function TeamPage() {
                     </div>
                   </CardContent>
                 </Card>
-              </div>
-            )}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </TabsContent>
           <TabsContent value="email" className="space-y-4">
             <Dialog 

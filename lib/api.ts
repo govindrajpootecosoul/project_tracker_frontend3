@@ -257,45 +257,27 @@ class ApiClient {
     return data
   }
 
-  async getMyTasks(useCache: boolean = true) {
-    const endpoint = '/tasks/my'
-    if (useCache) {
-      const cached = this.getCachedData<any>(endpoint)
-      if (cached) {
-        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
-        return Promise.resolve(cached)
-      }
-    }
+  async getMyTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+    const { limit = 20, skip = 0, useCache = false } = options || {}
+    const endpoint = `/tasks/my?limit=${limit}&skip=${skip}`
+    // Don't use cache for paginated requests
     const data = await this.request(endpoint)
-    this.setCachedData(endpoint, data)
     return data
   }
 
-  async getTeamTasks(useCache: boolean = true) {
-    const endpoint = '/tasks/team'
-    if (useCache) {
-      const cached = this.getCachedData<any>(endpoint)
-      if (cached) {
-        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
-        return Promise.resolve(cached)
-      }
-    }
+  async getTeamTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+    const { limit = 20, skip = 0, useCache = false } = options || {}
+    const endpoint = `/tasks/team?limit=${limit}&skip=${skip}`
+    // Don't use cache for paginated requests
     const data = await this.request(endpoint)
-    this.setCachedData(endpoint, data)
     return data
   }
 
-  async getReviewTasks(useCache: boolean = true) {
-    const endpoint = '/tasks/review'
-    if (useCache) {
-      const cached = this.getCachedData<any>(endpoint)
-      if (cached) {
-        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
-        return Promise.resolve(cached)
-      }
-    }
+  async getReviewTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+    const { limit = 20, skip = 0, useCache = false } = options || {}
+    const endpoint = `/tasks/review?limit=${limit}&skip=${skip}`
+    // Don't use cache for paginated requests
     const data = await this.request(endpoint)
-    this.setCachedData(endpoint, data)
     return data
   }
 
@@ -313,31 +295,19 @@ class ApiClient {
     return data
   }
 
-  async getDepartmentTasks(useCache: boolean = true) {
-    const endpoint = '/tasks/department'
-    if (useCache) {
-      const cached = this.getCachedData<any>(endpoint)
-      if (cached) {
-        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
-        return Promise.resolve(cached)
-      }
-    }
+  async getDepartmentTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+    const { limit = 100, skip = 0, useCache = false } = options || {}
+    const endpoint = `/tasks/department?limit=${limit}&skip=${skip}`
+    // Don't use cache for paginated requests
     const data = await this.request(endpoint)
-    this.setCachedData(endpoint, data)
     return data
   }
 
-  async getAllDepartmentsTasks(useCache: boolean = true) {
-    const endpoint = '/tasks/all-departments'
-    if (useCache) {
-      const cached = this.getCachedData<any>(endpoint)
-      if (cached) {
-        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
-        return Promise.resolve(cached)
-      }
-    }
+  async getAllDepartmentsTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+    const { limit = 20, skip = 0, useCache = false } = options || {}
+    const endpoint = `/tasks/all-departments?limit=${limit}&skip=${skip}`
+    // Don't use cache for paginated requests
     const data = await this.request(endpoint)
-    this.setCachedData(endpoint, data)
     return data
   }
 
@@ -390,18 +360,12 @@ class ApiClient {
     return result
   }
 
-  // Projects - with caching
-  async getProjects(useCache: boolean = true) {
-    const endpoint = '/projects'
-    if (useCache) {
-      const cached = this.getCachedData<any>(endpoint)
-      if (cached) {
-        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
-        return Promise.resolve(cached)
-      }
-    }
+  // Projects - with pagination
+  async getProjects(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+    const { limit = 20, skip = 0, useCache = false } = options || {}
+    const endpoint = `/projects?limit=${limit}&skip=${skip}`
+    // Don't use cache for paginated requests
     const data = await this.request(endpoint)
-    this.setCachedData(endpoint, data)
     return data
   }
 
@@ -471,30 +435,20 @@ class ApiClient {
     })
   }
 
-  // Team - with caching (skips caching only for search queries)
-  async getTeamMembers(params?: { department?: string; search?: string }, useCache: boolean = true) {
+  // Team - with pagination
+  async getTeamMembers(params?: { department?: string; search?: string; limit?: number; skip?: number }, useCache: boolean = false) {
     const queryParams = new URLSearchParams()
     if (params?.department) queryParams.append('department', params.department)
     if (params?.search) queryParams.append('search', params.search)
+    const limit = params?.limit || 20
+    const skip = params?.skip || 0
+    queryParams.append('limit', limit.toString())
+    queryParams.append('skip', skip.toString())
     const query = queryParams.toString()
-    const endpoint = `/team/members${query ? `?${query}` : ''}`
+    const endpoint = `/team/members?${query}`
     
-    const shouldCache = !params?.search
-
-    if (useCache && shouldCache) {
-      const cached = this.getCachedData<any>(endpoint)
-      if (cached) {
-        // Fetch fresh data in background
-        this.request(endpoint)
-          .then(data => this.setCachedData(endpoint, data))
-          .catch(() => {})
-        return Promise.resolve(cached)
-      }
-    }
+    // Don't use cache for paginated requests
     const data = await this.request(endpoint)
-    if (shouldCache) {
-      this.setCachedData(endpoint, data)
-    }
     return data
   }
 
@@ -562,11 +516,14 @@ class ApiClient {
   async updateAutoEmailConfig(data: {
     enabled?: boolean
     toEmails?: string[]
-    departments?: string[]
-    daysOfWeek?: number[]
-    timeOfDay?: string
     timezone?: string
     sendWhenEmpty?: boolean
+    departmentConfigs?: Array<{
+      department: string
+      enabled: boolean
+      daysOfWeek: number[]
+      timeOfDay: string
+    }>
   }) {
     return this.request('/email/admin/auto-email-config', {
       method: 'POST',
@@ -595,18 +552,12 @@ class ApiClient {
     })
   }
 
-  // Credentials - with caching
-  async getCredentials(useCache: boolean = true) {
-    const endpoint = '/credentials'
-    if (useCache) {
-      const cached = this.getCachedData<any>(endpoint)
-      if (cached) {
-        this.request(endpoint).then(data => this.setCachedData(endpoint, data)).catch(() => {})
-        return Promise.resolve(cached)
-      }
-    }
+  // Credentials - with pagination
+  async getCredentials(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+    const { limit = 20, skip = 0, useCache = false } = options || {}
+    const endpoint = `/credentials?limit=${limit}&skip=${skip}`
+    // Don't use cache for paginated requests
     const data = await this.request(endpoint)
-    this.setCachedData(endpoint, data)
     return data
   }
 
