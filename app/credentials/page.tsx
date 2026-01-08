@@ -234,6 +234,68 @@ export default function CredentialsPage() {
     return visibleMemberIds.every((id) => selectedMemberIds.includes(id))
   }, [visibleMemberIds, selectedMemberIds])
 
+  // Get unique companies from credentials
+  const allCompanies = useMemo(() => {
+    const companies = new Set<string>()
+    filteredCredentialsByTab.forEach(credential => {
+      if (credential.company) {
+        companies.add(credential.company)
+      }
+    })
+    return Array.from(companies).sort()
+  }, [filteredCredentialsByTab])
+
+  // Filter companies based on input value
+  const filteredCompanies = useMemo(() => {
+    if (!companyInputValue.trim()) {
+      return allCompanies
+    }
+    const query = companyInputValue.toLowerCase()
+    return allCompanies.filter(company => company.toLowerCase().includes(query))
+  }, [allCompanies, companyInputValue])
+
+  // Get unique geographies from credentials filtered by company
+  const allGeographies = useMemo(() => {
+    const geographies = new Set<string>()
+    filteredCredentialsByTab.forEach(credential => {
+      if (credential.geography && (!filterCompany || credential.company === filterCompany)) {
+        geographies.add(credential.geography)
+      }
+    })
+    return Array.from(geographies).sort()
+  }, [filteredCredentialsByTab, filterCompany])
+
+  // Filter geographies based on input value
+  const filteredGeographiesByInput = useMemo(() => {
+    if (!geographyInputValue.trim()) {
+      return allGeographies
+    }
+    const query = geographyInputValue.toLowerCase()
+    return allGeographies.filter(geography => geography.toLowerCase().includes(query))
+  }, [allGeographies, geographyInputValue])
+
+  // Get unique platforms from credentials filtered by company and geography
+  const allPlatforms = useMemo(() => {
+    const platforms = new Set<string>()
+    filteredCredentialsByTab.forEach(credential => {
+      if (credential.platform && 
+          (!filterCompany || credential.company === filterCompany) &&
+          (!filterGeography || credential.geography === filterGeography)) {
+        platforms.add(credential.platform)
+      }
+    })
+    return Array.from(platforms).sort()
+  }, [filteredCredentialsByTab, filterCompany, filterGeography])
+
+  // Filter platforms based on input value
+  const filteredPlatformsByInput = useMemo(() => {
+    if (!platformInputValue.trim()) {
+      return allPlatforms
+    }
+    const query = platformInputValue.toLowerCase()
+    return allPlatforms.filter(platform => platform.toLowerCase().includes(query))
+  }, [allPlatforms, platformInputValue])
+
   const fetchUsers = useCallback(async () => {
     try {
       const data = await apiClient.getTeamUsers()
