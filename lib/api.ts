@@ -7,6 +7,30 @@ export interface DepartmentDto {
   projectCount?: number
 }
 
+export interface PaginatedTasksResponse {
+  tasks: any[]
+  total: number
+  hasMore: boolean
+}
+
+export interface CreateTaskResponse {
+  id?: string
+  success?: boolean
+  count?: number
+  tasks?: any[]
+  [key: string]: any // Allow other task properties for single task response
+}
+
+export interface UpdateDepartmentResponse {
+  id: string
+  name: string
+  userCount?: number
+  projectCount?: number
+  usersUpdated?: number
+  projectsUpdated?: number
+  [key: string]: any
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 const CACHE_PREFIX = 'api_cache_'
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
@@ -257,27 +281,27 @@ class ApiClient {
     return data
   }
 
-  async getMyTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+  async getMyTasks(options?: { limit?: number; skip?: number; useCache?: boolean }): Promise<PaginatedTasksResponse> {
     const { limit = 20, skip = 0, useCache = false } = options || {}
     const endpoint = `/tasks/my?limit=${limit}&skip=${skip}`
     // Don't use cache for paginated requests
-    const data = await this.request(endpoint)
+    const data = await this.request<PaginatedTasksResponse>(endpoint)
     return data
   }
 
-  async getTeamTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+  async getTeamTasks(options?: { limit?: number; skip?: number; useCache?: boolean }): Promise<PaginatedTasksResponse> {
     const { limit = 20, skip = 0, useCache = false } = options || {}
     const endpoint = `/tasks/team?limit=${limit}&skip=${skip}`
     // Don't use cache for paginated requests
-    const data = await this.request(endpoint)
+    const data = await this.request<PaginatedTasksResponse>(endpoint)
     return data
   }
 
-  async getReviewTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+  async getReviewTasks(options?: { limit?: number; skip?: number; useCache?: boolean }): Promise<PaginatedTasksResponse> {
     const { limit = 20, skip = 0, useCache = false } = options || {}
     const endpoint = `/tasks/review?limit=${limit}&skip=${skip}`
     // Don't use cache for paginated requests
-    const data = await this.request(endpoint)
+    const data = await this.request<PaginatedTasksResponse>(endpoint)
     return data
   }
 
@@ -295,19 +319,19 @@ class ApiClient {
     return data
   }
 
-  async getDepartmentTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+  async getDepartmentTasks(options?: { limit?: number; skip?: number; useCache?: boolean }): Promise<PaginatedTasksResponse> {
     const { limit = 100, skip = 0, useCache = false } = options || {}
     const endpoint = `/tasks/department?limit=${limit}&skip=${skip}`
     // Don't use cache for paginated requests
-    const data = await this.request(endpoint)
+    const data = await this.request<PaginatedTasksResponse>(endpoint)
     return data
   }
 
-  async getAllDepartmentsTasks(options?: { limit?: number; skip?: number; useCache?: boolean }) {
+  async getAllDepartmentsTasks(options?: { limit?: number; skip?: number; useCache?: boolean }): Promise<PaginatedTasksResponse> {
     const { limit = 20, skip = 0, useCache = false } = options || {}
     const endpoint = `/tasks/all-departments?limit=${limit}&skip=${skip}`
     // Don't use cache for paginated requests
-    const data = await this.request(endpoint)
+    const data = await this.request<PaginatedTasksResponse>(endpoint)
     return data
   }
 
@@ -322,8 +346,8 @@ class ApiClient {
     return this.request(`/tasks/assignable-members${query ? `?${query}` : ''}`)
   }
 
-  async createTask(data: any) {
-    const result = await this.request('/tasks', {
+  async createTask(data: any): Promise<CreateTaskResponse> {
+    const result = await this.request<CreateTaskResponse>('/tasks', {
       method: 'POST',
       body: JSON.stringify(data),
     })
@@ -481,8 +505,8 @@ class ApiClient {
     return result
   }
 
-  async updateDepartment(id: string, name: string) {
-    const result = await this.request(`/team/departments/${id}`, {
+  async updateDepartment(id: string, name: string): Promise<UpdateDepartmentResponse> {
+    const result = await this.request<UpdateDepartmentResponse>(`/team/departments/${id}`, {
       method: 'PUT',
       body: JSON.stringify({ name }),
     })

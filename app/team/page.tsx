@@ -118,7 +118,7 @@ const mapDepartmentsResponse = (data: DepartmentDto[] | string[]): DepartmentOpt
         isLegacy: !item.id,
       }
     })
-    .filter((dept): dept is DepartmentOption => Boolean(dept?.name))
+    .filter((dept) => Boolean(dept && dept.name)) as DepartmentOption[]
 
   const unique = new Map<string, DepartmentOption>()
   normalized.forEach((dept) => {
@@ -716,16 +716,20 @@ export default function TeamPage() {
 
   const fetchDepartmentTasksForEmail = useCallback(async (): Promise<any[]> => {
     if (isAdmin) {
-      return apiClient.getDepartmentTasks()
+      const result = await apiClient.getDepartmentTasks()
+      return result.tasks || []
     }
 
-    const [myTasks, teamTasks] = await Promise.all([
+    const [myTasksResult, teamTasksResult] = await Promise.all([
       apiClient.getMyTasks(),
       apiClient.getTeamTasks(),
     ])
 
+    const myTasks = myTasksResult.tasks || []
+    const teamTasks = teamTasksResult.tasks || []
+
     const uniqueTasks = new Map<string, any>()
-    ;[...(myTasks || []), ...(teamTasks || [])].forEach((task: any) => {
+    ;[...myTasks, ...teamTasks].forEach((task: any) => {
       if (task?.id && !uniqueTasks.has(task.id)) {
         uniqueTasks.set(task.id, task)
       }
@@ -1438,7 +1442,8 @@ export default function TeamPage() {
                   // Auto-fill subject when dialog opens
                   const autoFillSubject = async () => {
                     try {
-                      const myTasks = await apiClient.getMyTasks()
+                      const myTasksResult = await apiClient.getMyTasks()
+                      const myTasks = myTasksResult.tasks || []
                       const inProgressTasks = myTasks.filter((task: any) => {
                         const status = String(task.status || '').toUpperCase().trim()
                         return status === 'IN_PROGRESS'
@@ -1666,7 +1671,8 @@ export default function TeamPage() {
                               setDepartmentTaskCounts(null)
                               applyDepartmentMembersForLeave([])
                               try {
-                                const myTasks = await apiClient.getMyTasks()
+                                const myTasksResult = await apiClient.getMyTasks()
+                                const myTasks = myTasksResult.tasks || []
                                 const inProgressAndRecurringTasks = myTasks.filter((task: any) => {
                                   const status = String(task.status || '').toUpperCase().trim()
                                   return status === 'IN_PROGRESS' || status === 'RECURRING'

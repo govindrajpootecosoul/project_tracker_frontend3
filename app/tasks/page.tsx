@@ -59,6 +59,8 @@ interface Task {
   reviewedById?: string
   reviewedAt?: string
   statusUpdatedAt?: string
+  createdAt?: string
+  updatedAt?: string
   createdById: string
   assignees: { user: { id: string; name?: string; email: string } }[]
   reviewRequestedBy?: { id: string; name?: string; email: string } | null
@@ -1281,10 +1283,11 @@ export default function TasksPage() {
       setTimeout(async () => {
         try {
           const reviewTasksData = await apiClient.getReviewTasks()
-          setReviewTasks(reviewTasksData as Task[])
+          const tasksArray = reviewTasksData.tasks || []
+          setReviewTasks(tasksArray as Task[])
           console.log('Refreshed review tasks after accept:', {
-            count: (reviewTasksData as Task[]).length,
-            tasks: (reviewTasksData as Task[]).map(t => ({
+            count: tasksArray.length,
+            tasks: tasksArray.map(t => ({
               id: t.id,
               title: t.title,
               reviewStatus: t.reviewStatus,
