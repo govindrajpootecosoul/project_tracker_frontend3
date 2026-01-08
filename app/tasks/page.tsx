@@ -937,6 +937,7 @@ export default function TasksPage() {
 
       // Convert taskFields array to comma-separated strings for backend
       const titles = validFields.map(field => field.title.trim()).join(',')
+      // Join descriptions - empty strings are preserved to maintain index mapping
       const descriptions = validFields.map(field => field.description.trim()).join(',')
 
       const cleanData: any = {
@@ -1671,17 +1672,7 @@ export default function TasksPage() {
         return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
       }
       
-      // Default sort: By statusUpdatedAt (most recently updated first), then by createdAt
-      // Tasks with statusUpdatedAt come first
-      if (a.statusUpdatedAt && b.statusUpdatedAt) {
-        const aTime = new Date(a.statusUpdatedAt).getTime()
-        const bTime = new Date(b.statusUpdatedAt).getTime()
-        return bTime - aTime // Descending order (newest first)
-      }
-      if (a.statusUpdatedAt) return -1
-      if (b.statusUpdatedAt) return 1
-      
-      // If no statusUpdatedAt, sort by createdAt
+      // Default sort: By createdAt (newest first) at the top
       if (a.createdAt && b.createdAt) {
         const aTime = new Date(a.createdAt).getTime()
         const bTime = new Date(b.createdAt).getTime()
@@ -1689,6 +1680,15 @@ export default function TasksPage() {
       }
       if (a.createdAt) return -1
       if (b.createdAt) return 1
+      
+      // If no createdAt, fallback to statusUpdatedAt
+      if (a.statusUpdatedAt && b.statusUpdatedAt) {
+        const aTime = new Date(a.statusUpdatedAt).getTime()
+        const bTime = new Date(b.statusUpdatedAt).getTime()
+        return bTime - aTime // Descending order (newest first)
+      }
+      if (a.statusUpdatedAt) return -1
+      if (b.statusUpdatedAt) return 1
       
       return 0
     })
@@ -2157,7 +2157,7 @@ export default function TasksPage() {
                       Add multiple tasks by clicking the plus icon
                     </p>
                     {taskFields.map((field, index) => (
-                      <div key={index} className="mb-4 p-4 border rounded-lg space-y-3">
+                      <div key={`task-field-${index}`} className="mb-4 p-4 border rounded-lg space-y-3">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 space-y-3">
                             <div>
@@ -2168,8 +2168,9 @@ export default function TasksPage() {
                                 id={`title-${index}`}
                                 value={field.title}
                                 onChange={(e) => {
-                                  const newFields = [...taskFields]
-                                  newFields[index].title = e.target.value
+                                  const newFields = taskFields.map((f, i) => 
+                                    i === index ? { ...f, title: e.target.value } : f
+                                  )
                                   setTaskFields(newFields)
                                 }}
                                 placeholder="Enter task title"
@@ -2183,8 +2184,9 @@ export default function TasksPage() {
                                 className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                                 value={field.description}
                                 onChange={(e) => {
-                                  const newFields = [...taskFields]
-                                  newFields[index].description = e.target.value
+                                  const newFields = taskFields.map((f, i) => 
+                                    i === index ? { ...f, description: e.target.value } : f
+                                  )
                                   setTaskFields(newFields)
                                 }}
                                 placeholder="Enter task description (optional)"

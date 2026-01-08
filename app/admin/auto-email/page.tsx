@@ -177,9 +177,12 @@ export default function AutoEmailConfigPage() {
     }
   }
 
-  const addEmail = () => {
+  const addEmail = async () => {
     const email = newEmail.trim()
-    if (!email) return
+    if (!email) {
+      setError('Please enter an email address')
+      return
+    }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     if (!emailRegex.test(email)) {
@@ -187,24 +190,79 @@ export default function AutoEmailConfigPage() {
       return
     }
 
-    if (config.toEmails.includes(email.toLowerCase())) {
+    const emailLower = email.toLowerCase()
+    if (config.toEmails.includes(emailLower)) {
       setError('Email already added')
       return
     }
 
+    // Add email to the list immediately in local state
+    const updatedToEmails = [...config.toEmails, emailLower]
     setConfig((prev) => ({
       ...prev,
-      toEmails: [...prev.toEmails, email.toLowerCase()],
+      toEmails: updatedToEmails,
     }))
     setNewEmail('')
     setError(null)
+
+    // Auto-save to backend immediately
+    try {
+      await apiClient.updateAutoEmailConfig({
+        enabled: config.enabled,
+        toEmails: updatedToEmails,
+        timezone: config.timezone,
+        sendWhenEmpty: config.sendWhenEmpty,
+        departmentConfigs: config.departmentConfigs,
+      })
+      setSuccess(`Email "${emailLower}" added and saved successfully!`)
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => {
+        setSuccess(null)
+      }, 3000)
+    } catch (error: any) {
+      console.error('Failed to save email:', error)
+      // Revert the change if save failed
+      setConfig((prev) => ({
+        ...prev,
+        toEmails: prev.toEmails.filter((e) => e !== emailLower),
+      }))
+      setError(error.message || 'Failed to save email. Please try again.')
+    }
   }
 
-  const removeEmail = (emailToRemove: string) => {
+  const removeEmail = async (emailToRemove: string) => {
+    // Remove email from local state immediately
+    const updatedToEmails = config.toEmails.filter((email) => email !== emailToRemove)
     setConfig((prev) => ({
       ...prev,
-      toEmails: prev.toEmails.filter((email) => email !== emailToRemove),
+      toEmails: updatedToEmails,
     }))
+
+    // Auto-save to backend immediately
+    try {
+      await apiClient.updateAutoEmailConfig({
+        enabled: config.enabled,
+        toEmails: updatedToEmails,
+        timezone: config.timezone,
+        sendWhenEmpty: config.sendWhenEmpty,
+        departmentConfigs: config.departmentConfigs,
+      })
+      setSuccess(`Email "${emailToRemove}" removed successfully!`)
+      
+      // Clear success message after 2 seconds
+      setTimeout(() => {
+        setSuccess(null)
+      }, 2000)
+    } catch (error: any) {
+      console.error('Failed to remove email:', error)
+      // Revert the change if save failed
+      setConfig((prev) => ({
+        ...prev,
+        toEmails: [...prev.toEmails, emailToRemove],
+      }))
+      setError(error.message || 'Failed to remove email. Please try again.')
+    }
   }
 
   const handleEmailKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
