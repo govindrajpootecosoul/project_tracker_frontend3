@@ -665,17 +665,23 @@ export default function TeamPage() {
     const fetchPromise = apiClient
       .getTeamMembers({ department }, true)
       .then((data) => {
-        const members = (data as TeamMember[]) || []
-        departmentMembersCacheRef.current[cacheKey] = members
-        applyDepartmentMembersForLeave(members)
+        const members = Array.isArray(data) ? data : []
+        if (members.length > 0) {
+          departmentMembersCacheRef.current[cacheKey] = members
+          applyDepartmentMembersForLeave(members)
+        }
+        // Don't clear members if fetch fails - keep existing ones
         return members
       })
       .catch((error) => {
         console.error('Failed to fetch department members:', error)
-        if (showLoading) {
+        // Don't clear members on error - keep existing cached members
+        // Only clear if we don't have any cached members
+        const cachedMembers = departmentMembersCacheRef.current[cacheKey]
+        if (!cachedMembers || cachedMembers.length === 0) {
           applyDepartmentMembersForLeave([])
         }
-        return []
+        return cachedMembers || []
       })
       .finally(() => {
         if (showLoading) {
@@ -696,21 +702,30 @@ export default function TeamPage() {
 
     const cacheKey = department.toLowerCase()
     const cachedMembers = departmentMembersCacheRef.current[cacheKey]
-    if (cachedMembers) {
+    if (cachedMembers && Array.isArray(cachedMembers) && cachedMembers.length > 0) {
+      // Use cached members immediately
       applyDepartmentMembersForLeave(cachedMembers)
-      refreshDepartmentMembers(department)
+      // Refresh in background without clearing
+      refreshDepartmentMembers(department).catch(() => {
+        // Ignore refresh errors, keep cached members
+      })
       return cachedMembers
     }
 
+    // Try to use teamMembers as fallback
     const membersArray = Array.isArray(teamMembers) ? teamMembers : []
     const fallbackMembers = membersArray.filter((member) => (member.department || '').toLowerCase() === cacheKey)
     if (fallbackMembers.length > 0) {
       departmentMembersCacheRef.current[cacheKey] = fallbackMembers
       applyDepartmentMembersForLeave(fallbackMembers)
-      refreshDepartmentMembers(department)
+      // Refresh in background without clearing
+      refreshDepartmentMembers(department).catch(() => {
+        // Ignore refresh errors, keep fallback members
+      })
       return fallbackMembers
     }
 
+    // No cache or fallback, fetch with loading indicator
     return refreshDepartmentMembers(department, true)
   }, [teamMembers, applyDepartmentMembersForLeave, refreshDepartmentMembers])
 
@@ -756,6 +771,32 @@ export default function TeamPage() {
       fetchTeamMembers({ force: false })
     }
   }, [selectedDepartment, userRole, userDepartment, isSuperAdmin, allTeamMembers.length, fetchTeamMembers])
+
+  // Load department members when email dialog opens and includeDepartmentTasks is checked
+  useEffect(() => {
+    if (isEmailDialogOpen && includeDepartmentTasks && userDepartment) {
+      // Always load current user's department members
+      const cacheKey = userDepartment.toLowerCase()
+      const cachedMembers = departmentMembersCacheRef.current[cacheKey]
+      
+      // Only load if we don't have cached members or if they're empty
+      if (!cachedMembers || cachedMembers.length === 0) {
+        const loadMembers = async () => {
+          try {
+            await loadDepartmentMembersForLeave(userDepartment)
+          } catch (error) {
+            console.error('Failed to load department members:', error)
+          }
+        }
+        loadMembers()
+      } else {
+        // Use cached members immediately
+        applyDepartmentMembersForLeave(cachedMembers)
+      }
+    }
+    // Don't clear members when dialog closes or checkbox changes
+    // Members will persist until explicitly cleared
+  }, [isEmailDialogOpen, includeDepartmentTasks, userDepartment, loadDepartmentMembersForLeave, applyDepartmentMembersForLeave])
 
   const handleSendEmail = async () => {
     // Validate required fields
@@ -1523,7 +1564,8 @@ export default function TeamPage() {
                           </div>
                           <div className="border rounded-md p-2 max-h-48 overflow-y-auto">
                             {(() => {
-                              if (isDepartmentMembersLoading && departmentMembersForLeave.length === 0) {
+                              const membersArray = Array.isArray(departmentMembersForLeave) ? departmentMembersForLeave : []
+                              if (isDepartmentMembersLoading && membersArray.length === 0) {
                                 return (
                                   <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
                                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -1533,7 +1575,7 @@ export default function TeamPage() {
                               }
 
                               // Filter members based on search
-                              const filteredMembers = departmentMembersForLeave.filter((member) => {
+                              const filteredMembers = membersArray.filter((member) => {
                                 if (!leaveMemberSearch.trim()) return true
                                 const searchLower = leaveMemberSearch.toLowerCase()
                                 const name = (member.name || '').toLowerCase()
@@ -1544,7 +1586,7 @@ export default function TeamPage() {
                               if (filteredMembers.length === 0) {
                                 return (
                                   <p className="text-sm text-muted-foreground text-center py-2">
-                                    {departmentMembersForLeave.length === 0
+                                    {membersArray.length === 0
                                       ? 'No department members found'
                                       : 'No members found matching your search'}
                                   </p>
@@ -1614,7 +1656,9 @@ export default function TeamPage() {
                             if (checked && userDepartment) {
                               let departmentMembers: TeamMember[] = []
                               try {
-                                departmentMembers = await loadDepartmentMembersForLeave(userDepartment)
+                                // Always load current user's department members
+                                const membersResult = await loadDepartmentMembersForLeave(userDepartment)
+                                departmentMembers = Array.isArray(membersResult) ? membersResult : []
                                 const departmentTasks = await fetchDepartmentTasksForEmail()
                                 
                                 const inProgressAndRecurringTasks = departmentTasks.filter((task: any) => {
@@ -1633,7 +1677,8 @@ export default function TeamPage() {
                                 
                                 setDepartmentTaskCounts({ employees: employeeCount, tasks: taskCount })
                                 
-                                const departmentEmails = departmentMembers
+                                const membersArray = Array.isArray(departmentMembers) ? departmentMembers : []
+                                const departmentEmails = membersArray
                                   .map((member: TeamMember) => member.email)
                                   .filter((email: string) => email && email.trim())
                                   .join(', ')
@@ -1647,16 +1692,18 @@ export default function TeamPage() {
                                 console.error('Failed to fetch department task counts:', error)
                                 setDepartmentTaskCounts(null)
                                 
-                                let fallbackMembers = departmentMembers
+                                let fallbackMembers: TeamMember[] = Array.isArray(departmentMembers) ? departmentMembers : []
                                 if (fallbackMembers.length === 0 && userDepartment) {
                                   try {
-                                    fallbackMembers = await loadDepartmentMembersForLeave(userDepartment)
+                                    const fallbackResult = await loadDepartmentMembersForLeave(userDepartment)
+                                    fallbackMembers = Array.isArray(fallbackResult) ? fallbackResult : []
                                   } catch {
                                     fallbackMembers = []
                                   }
                                 }
 
-                                const fallbackEmails = fallbackMembers
+                                const fallbackMembersArray = Array.isArray(fallbackMembers) ? fallbackMembers : []
+                                const fallbackEmails = fallbackMembersArray
                                   .map((member: TeamMember) => member.email)
                                   .filter((email: string) => email && email.trim())
                                   .join(', ')
