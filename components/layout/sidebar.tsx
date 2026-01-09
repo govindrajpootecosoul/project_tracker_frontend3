@@ -377,9 +377,6 @@ export function Sidebar() {
               <div>
                 <p className="font-semibold text-sm">Thoughts Time</p>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{displayThought}</p>
-                <p className="text-xs text-muted-foreground mt-1 italic">
-                  (Automatically changes daily)
-                </p>
               </div>
               {isSuperAdmin && (
                 <div className="space-y-2">
