@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Edit, Trash2, MessageSquare, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, Users, X, Loader2, MoreVertical, Minus } from 'lucide-react'
+import { Plus, Edit, Trash2, MessageSquare, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, Users, X, Loader2, MoreVertical, Minus, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
 import { format } from 'date-fns'
 import type { TaskComment } from '@/types/comments'
 import { TaskListSkeleton, TaskTableSkeleton } from '@/components/skeletons/task-skeleton'
@@ -173,36 +173,44 @@ export default function TasksPage() {
   const [taskSearchQuery, setTaskSearchQuery] = useState('') // Search query for tasks
   const commentsContainerRef = useRef<HTMLDivElement | null>(null)
   const lastCommentCountRef = useRef<number>(0)
+  const lastMenuClickRef = useRef<{ taskId: string; timestamp: number } | null>(null)
   const [isSavingTask, setIsSavingTask] = useState(false)
   const [openActionTaskId, setOpenActionTaskId] = useState<string | null>(null)
+  const [duplicatingTaskId, setDuplicatingTaskId] = useState<string | null>(null)
   const projectFilter = searchParams.get('projectId')
   const projectFilterName = searchParams.get('projectName')
   const [departmentFilter, setDepartmentFilter] = useState<string>('all')
   const [departments, setDepartments] = useState<string[]>([])
   const [otherDepartmentTasks, setOtherDepartmentTasks] = useState<Task[]>([])
   const [isLoadingOtherDept, setIsLoadingOtherDept] = useState(false)
-  const [taskFields, setTaskFields] = useState<Array<{ title: string; description: string }>>([{ title: '', description: '' }])
+  const [taskFields, setTaskFields] = useState<Array<{ title: string; description: string; imageCount: string; videoCount: string }>>([{ title: '', description: '', imageCount: '', videoCount: '' }])
   
-  // Pagination state
-  const [myTasksSkip, setMyTasksSkip] = useState(0)
-  const [myTasksHasMore, setMyTasksHasMore] = useState(true)
+  // Pagination state for My Tasks
+  const [myTasksPage, setMyTasksPage] = useState(1)
+  const [myTasksItemsPerPage, setMyTasksItemsPerPage] = useState(20)
+  const [myTasksTotal, setMyTasksTotal] = useState(0)
   const [isLoadingMyTasks, setIsLoadingMyTasks] = useState(false)
   const [isInitialLoadingMyTasks, setIsInitialLoadingMyTasks] = useState(true)
   
-  const [teamTasksSkip, setTeamTasksSkip] = useState(0)
-  const [teamTasksHasMore, setTeamTasksHasMore] = useState(true)
+  // Pagination state for Team Tasks
+  const [teamTasksPage, setTeamTasksPage] = useState(1)
+  const [teamTasksItemsPerPage, setTeamTasksItemsPerPage] = useState(20)
+  const [teamTasksTotal, setTeamTasksTotal] = useState(0)
   const [isLoadingTeamTasks, setIsLoadingTeamTasks] = useState(false)
   const [isInitialLoadingTeamTasks, setIsInitialLoadingTeamTasks] = useState(true)
   
-  const [reviewTasksSkip, setReviewTasksSkip] = useState(0)
-  const [reviewTasksHasMore, setReviewTasksHasMore] = useState(true)
+  // Pagination state for Review Tasks
+  const [reviewTasksPage, setReviewTasksPage] = useState(1)
+  const [reviewTasksItemsPerPage, setReviewTasksItemsPerPage] = useState(20)
+  const [reviewTasksTotal, setReviewTasksTotal] = useState(0)
   const [isLoadingReviewTasks, setIsLoadingReviewTasks] = useState(false)
   const [isInitialLoadingReviewTasks, setIsInitialLoadingReviewTasks] = useState(true)
   
+  // Pagination state for Other Dept Tasks
+  const [otherDeptTasksPage, setOtherDeptTasksPage] = useState(1)
+  const [otherDeptTasksItemsPerPage, setOtherDeptTasksItemsPerPage] = useState(20)
+  const [otherDeptTasksTotal, setOtherDeptTasksTotal] = useState(0)
   const [isInitialLoadingOtherDept, setIsInitialLoadingOtherDept] = useState(true)
-  
-  const [otherDeptTasksSkip, setOtherDeptTasksSkip] = useState(0)
-  const [otherDeptTasksHasMore, setOtherDeptTasksHasMore] = useState(true)
   
   // Refs for infinite scroll
   const myTasksScrollRef = useRef<HTMLDivElement>(null)
@@ -329,129 +337,90 @@ export default function TasksPage() {
     }
   }, [activeTab, showOtherDeptTab])
 
-  const fetchTasks = useCallback(async (loadMore: boolean = false) => {
+  const fetchTasks = useCallback(async () => {
     try {
-      const skip = loadMore ? myTasksSkip : 0
-      if (!loadMore) {
-        setIsInitialLoadingMyTasks(true)
-      }
+      setIsInitialLoadingMyTasks(true)
       setIsLoadingMyTasks(true)
-      const limit = loadMore ? 50 : 200 // Load more initially (200) to show all statuses, then 50 per scroll
-      const result = await apiClient.getMyTasks({ limit, skip })
+      const skip = (myTasksPage - 1) * myTasksItemsPerPage
+      const result = await apiClient.getMyTasks({ limit: myTasksItemsPerPage, skip })
       const data = result.tasks || result // Handle both new and old format
       const tasksArray = Array.isArray(data) ? data : []
+      setTasks(tasksArray)
       
-      if (loadMore) {
-        // Deduplicate tasks by id to prevent blinking
-        setTasks(prev => {
-          const existingIds = new Set(prev.map(t => t.id))
-          const newTasks = tasksArray.filter(t => !existingIds.has(t.id))
-          return [...prev, ...newTasks]
-        })
-        setMyTasksSkip(prev => prev + tasksArray.length)
+      // Update total count from API response
+      if (result.total !== undefined) {
+        setMyTasksTotal(result.total)
       } else {
-        setTasks(tasksArray)
-        setMyTasksSkip(tasksArray.length)
+        // Fallback: estimate based on current page
+        setMyTasksTotal(tasksArray.length)
       }
-      setMyTasksHasMore(result.hasMore !== false && tasksArray.length === limit)
     } catch (error) {
       console.error('Failed to fetch my tasks:', error)
     } finally {
       setIsLoadingMyTasks(false)
       setIsInitialLoadingMyTasks(false)
     }
-  }, [myTasksSkip])
+  }, [myTasksPage, myTasksItemsPerPage])
 
-  const fetchTeamTasks = useCallback(async (loadMore: boolean = false) => {
+  const fetchTeamTasks = useCallback(async () => {
     try {
-      const skip = loadMore ? teamTasksSkip : 0
-      if (!loadMore) {
-        setIsInitialLoadingTeamTasks(true)
-      }
+      setIsInitialLoadingTeamTasks(true)
       setIsLoadingTeamTasks(true)
-      const limit = loadMore ? 50 : 200 // Load more initially (200) to show all statuses, then 50 per scroll
-      const result = await apiClient.getTeamTasks({ limit, skip })
+      const skip = (teamTasksPage - 1) * teamTasksItemsPerPage
+      const result = await apiClient.getTeamTasks({ limit: teamTasksItemsPerPage, skip })
       const data = result.tasks || result // Handle both new and old format
       const tasksArray = Array.isArray(data) ? data : []
+      setTeamTasks(tasksArray)
       
-      if (loadMore) {
-        // Deduplicate tasks by id to prevent blinking
-        setTeamTasks(prev => {
-          const existingIds = new Set(prev.map(t => t.id))
-          const newTasks = tasksArray.filter(t => !existingIds.has(t.id))
-          return [...prev, ...newTasks]
-        })
-        setTeamTasksSkip(prev => prev + tasksArray.length)
+      // Update total count from API response
+      if (result.total !== undefined) {
+        setTeamTasksTotal(result.total)
       } else {
-        setTeamTasks(tasksArray)
-        setTeamTasksSkip(tasksArray.length)
+        setTeamTasksTotal(tasksArray.length)
       }
-      setTeamTasksHasMore(result.hasMore !== false && tasksArray.length === limit)
     } catch (error) {
       console.error('Failed to fetch team tasks:', error)
     } finally {
       setIsLoadingTeamTasks(false)
       setIsInitialLoadingTeamTasks(false)
     }
-  }, [teamTasksSkip])
+  }, [teamTasksPage, teamTasksItemsPerPage])
 
-  const fetchReviewTasks = useCallback(async (loadMore: boolean = false) => {
+  const fetchReviewTasks = useCallback(async () => {
     try {
-      const skip = loadMore ? reviewTasksSkip : 0
-      if (!loadMore) {
-        setIsInitialLoadingReviewTasks(true)
-      }
+      setIsInitialLoadingReviewTasks(true)
       setIsLoadingReviewTasks(true)
-      const limit = loadMore ? 50 : 200 // Load more initially (200) to show all statuses, then 50 per scroll
-      const result = await apiClient.getReviewTasks({ limit, skip })
+      const skip = (reviewTasksPage - 1) * reviewTasksItemsPerPage
+      const result = await apiClient.getReviewTasks({ limit: reviewTasksItemsPerPage, skip })
       const data = result.tasks || result // Handle both new and old format
       const tasksArray = Array.isArray(data) ? data : []
+      setReviewTasks(tasksArray)
       
-      if (loadMore) {
-        // Deduplicate tasks by id to prevent blinking
-        setReviewTasks(prev => {
-          const existingIds = new Set(prev.map(t => t.id))
-          const newTasks = tasksArray.filter(t => !existingIds.has(t.id))
-          return [...prev, ...newTasks]
-        })
-        setReviewTasksSkip(prev => prev + tasksArray.length)
+      // Update total count from API response
+      if (result.total !== undefined) {
+        setReviewTasksTotal(result.total)
       } else {
-        setReviewTasks(tasksArray)
-        setReviewTasksSkip(tasksArray.length)
+        setReviewTasksTotal(tasksArray.length)
       }
-      setReviewTasksHasMore(result.hasMore !== false && tasksArray.length === limit)
-      console.log('Fetched Review Tasks:', {
-        count: tasksArray.length,
-        hasMore: result.hasMore,
-        tasks: tasksArray.map(t => ({
-          id: t.id,
-          title: t.title,
-          reviewStatus: t.reviewStatus,
-          reviewerId: t.reviewId,
-        })),
-      })
     } catch (error) {
       console.error('Failed to fetch review tasks:', error)
     } finally {
       setIsLoadingReviewTasks(false)
       setIsInitialLoadingReviewTasks(false)
     }
-  }, [reviewTasksSkip])
+  }, [reviewTasksPage, reviewTasksItemsPerPage])
 
-  const fetchOtherDepartmentTasks = useCallback(async (loadMore: boolean = false) => {
+  const fetchOtherDepartmentTasks = useCallback(async () => {
     if (!isSuperAdminUser) {
       setOtherDepartmentTasks([])
       setIsInitialLoadingOtherDept(false)
       return
     }
-    if (!loadMore) {
-      setIsInitialLoadingOtherDept(true)
-    }
+    setIsInitialLoadingOtherDept(true)
     setIsLoadingOtherDept(true)
     try {
-      const skip = loadMore ? otherDeptTasksSkip : 0
-      const limit = loadMore ? 50 : 200 // Load more initially (200) to show all statuses, then 50 per scroll
-      const result = await apiClient.getAllDepartmentsTasks({ limit, skip })
+      const skip = (otherDeptTasksPage - 1) * otherDeptTasksItemsPerPage
+      const result = await apiClient.getAllDepartmentsTasks({ limit: otherDeptTasksItemsPerPage, skip })
       const data = result.tasks || result // Handle both new and old format
       const tasksArray = Array.isArray(data) ? data : []
       const userDept = user?.department?.trim().toLowerCase()
@@ -461,30 +430,22 @@ export default function TasksPage() {
         if (!userDept) return true
         return projectDept !== userDept
       })
+      setOtherDepartmentTasks(filtered)
       
-      if (loadMore) {
-        // Deduplicate tasks by id to prevent blinking
-        setOtherDepartmentTasks(prev => {
-          const existingIds = new Set(prev.map(t => t.id))
-          const newTasks = filtered.filter(t => !existingIds.has(t.id))
-          return [...prev, ...newTasks]
-        })
-        setOtherDeptTasksSkip(prev => prev + filtered.length)
+      // Update total count from API response
+      if (result.total !== undefined) {
+        setOtherDeptTasksTotal(result.total)
       } else {
-        setOtherDepartmentTasks(filtered)
-        setOtherDeptTasksSkip(filtered.length)
+        setOtherDeptTasksTotal(filtered.length)
       }
-      setOtherDeptTasksHasMore(result.hasMore !== false && filtered.length === limit)
     } catch (error) {
       console.error('Failed to fetch other department tasks:', error)
-      if (!loadMore) {
-        setOtherDepartmentTasks([])
-      }
+      setOtherDepartmentTasks([])
     } finally {
       setIsLoadingOtherDept(false)
       setIsInitialLoadingOtherDept(false)
     }
-  }, [isSuperAdminUser, user?.department, otherDeptTasksSkip])
+  }, [isSuperAdminUser, user?.department, otherDeptTasksPage, otherDeptTasksItemsPerPage])
 
   useEffect(() => {
     fetchOtherDepartmentTasks()
@@ -624,7 +585,20 @@ export default function TasksPage() {
     fetchDepartments()
     fetchAllUsers()
     
-    // Listen for refresh events from navbar
+    // Check URL params for tab
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      const tab = params.get('tab')
+      if (tab === 'review') {
+        setActiveTab('review')
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router]) // Only run once on mount - fetch functions are called directly, not as dependencies
+
+  // Separate useEffect for event listeners using refs to avoid refresh loops
+  useEffect(() => {
+    // Listen for refresh events from navbar - only refresh on explicit events
     const handleRefreshTasks = () => {
       fetchTasks()
       fetchTeamTasks()
@@ -635,172 +609,50 @@ export default function TasksPage() {
     // Listen for switch to review tab event
     const handleSwitchToReviewTab = () => {
       setActiveTab('review')
-      fetchTasks() // Refresh tasks when switching to review tab
+      // Auto-refresh removed - no automatic refresh on tab switch
     }
     window.addEventListener('switchToReviewTab', handleSwitchToReviewTab)
-    
-    // Check URL params for tab
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search)
-      const tab = params.get('tab')
-      if (tab === 'review') {
-        setActiveTab('review')
-      }
-    }
     
     return () => {
       window.removeEventListener('refreshTasks', handleRefreshTasks)
       window.removeEventListener('switchToReviewTab', handleSwitchToReviewTab)
     }
-  }, [router, fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchProjects, fetchTeamMembers, fetchAllUsers])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Event listeners use latest fetch functions via closure, no need for dependencies
 
-  // Infinite scroll for My Tasks - only trigger on manual scroll
+  // Infinite scroll removed - all tabs load all tasks at once
+
+  // Auto-refresh removed - pagination will only update when user manually changes page
+
+  // Restore scroll when popover closes
   useEffect(() => {
-    if (activeTab !== 'my' || !myTasksHasMore || isLoadingMyTasks) return
-    
-    const sentinel = document.getElementById('my-tasks-sentinel')
-    if (!sentinel) return
-
-    let hasScrolled = false
-    const handleScroll = () => {
-      hasScrolled = true
-    }
-    
-    // Only enable infinite scroll after user has scrolled
-    window.addEventListener('scroll', handleScroll, { once: true })
-    window.addEventListener('wheel', handleScroll, { once: true })
-    window.addEventListener('touchmove', handleScroll, { once: true })
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Only load more if user has scrolled and sentinel is visible
-        if (entries[0].isIntersecting && !isLoadingMyTasks && hasScrolled) {
-          fetchTasks(true)
+    if (!openActionTaskId) {
+      // Restore scroll position and re-enable scrolling when popover closes
+      if (typeof window !== 'undefined') {
+        const preserved = (window as any).__preservedScrollY
+        if (preserved !== undefined) {
+          // Restore scrollIntoView
+          if ((window as any).__originalScrollIntoView) {
+            Element.prototype.scrollIntoView = (window as any).__originalScrollIntoView
+            delete (window as any).__originalScrollIntoView
+          }
+          
+          // Restore body styles
+          document.body.style.overflow = ''
+          document.body.style.position = ''
+          document.body.style.top = ''
+          document.body.style.width = ''
+          document.documentElement.style.overflow = ''
+          
+          // Restore scroll position
+          window.scrollTo(0, preserved)
+          
+          // Clear preserved scroll
+          delete (window as any).__preservedScrollY
         }
-      },
-      { threshold: 0.1, rootMargin: '50px' } // Reduced margin to only load when actually scrolling
-    )
-
-    observer.observe(sentinel)
-
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('wheel', handleScroll)
-      window.removeEventListener('touchmove', handleScroll)
+      }
     }
-  }, [activeTab, myTasksHasMore, isLoadingMyTasks, fetchTasks])
-
-  // Infinite scroll for Team Tasks - only trigger on manual scroll
-  useEffect(() => {
-    if (activeTab !== 'team' || !teamTasksHasMore || isLoadingTeamTasks) return
-    
-    const sentinel = document.getElementById('team-tasks-sentinel')
-    if (!sentinel) return
-
-    let hasScrolled = false
-    const handleScroll = () => {
-      hasScrolled = true
-    }
-    
-    // Only enable infinite scroll after user has scrolled
-    window.addEventListener('scroll', handleScroll, { once: true })
-    window.addEventListener('wheel', handleScroll, { once: true })
-    window.addEventListener('touchmove', handleScroll, { once: true })
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Only load more if user has scrolled and sentinel is visible
-        if (entries[0].isIntersecting && !isLoadingTeamTasks && hasScrolled) {
-          fetchTeamTasks(true)
-        }
-      },
-      { threshold: 0.1, rootMargin: '50px' } // Reduced margin to only load when actually scrolling
-    )
-
-    observer.observe(sentinel)
-
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('wheel', handleScroll)
-      window.removeEventListener('touchmove', handleScroll)
-    }
-  }, [activeTab, teamTasksHasMore, isLoadingTeamTasks, fetchTeamTasks])
-
-  // Infinite scroll for Review Tasks - only trigger on manual scroll
-  useEffect(() => {
-    if (activeTab !== 'review' || !reviewTasksHasMore || isLoadingReviewTasks) return
-    
-    const sentinel = document.getElementById('review-tasks-sentinel')
-    if (!sentinel) return
-
-    let hasScrolled = false
-    const handleScroll = () => {
-      hasScrolled = true
-    }
-    
-    // Only enable infinite scroll after user has scrolled
-    window.addEventListener('scroll', handleScroll, { once: true })
-    window.addEventListener('wheel', handleScroll, { once: true })
-    window.addEventListener('touchmove', handleScroll, { once: true })
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Only load more if user has scrolled and sentinel is visible
-        if (entries[0].isIntersecting && !isLoadingReviewTasks && hasScrolled) {
-          fetchReviewTasks(true)
-        }
-      },
-      { threshold: 0.1, rootMargin: '50px' } // Reduced margin to only load when actually scrolling
-    )
-
-    observer.observe(sentinel)
-
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('wheel', handleScroll)
-      window.removeEventListener('touchmove', handleScroll)
-    }
-  }, [activeTab, reviewTasksHasMore, isLoadingReviewTasks, fetchReviewTasks])
-
-  // Infinite scroll for Other Department Tasks - only trigger on manual scroll
-  useEffect(() => {
-    if (activeTab !== 'otherDept' || !otherDeptTasksHasMore || isLoadingOtherDept) return
-    
-    const sentinel = document.getElementById('other-dept-tasks-sentinel')
-    if (!sentinel) return
-
-    let hasScrolled = false
-    const handleScroll = () => {
-      hasScrolled = true
-    }
-    
-    // Only enable infinite scroll after user has scrolled
-    window.addEventListener('scroll', handleScroll, { once: true })
-    window.addEventListener('wheel', handleScroll, { once: true })
-    window.addEventListener('touchmove', handleScroll, { once: true })
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Only load more if user has scrolled and sentinel is visible
-        if (entries[0].isIntersecting && !isLoadingOtherDept && hasScrolled) {
-          fetchOtherDepartmentTasks(true)
-        }
-      },
-      { threshold: 0.1, rootMargin: '50px' } // Reduced margin to only load when actually scrolling
-    )
-
-    observer.observe(sentinel)
-
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('wheel', handleScroll)
-      window.removeEventListener('touchmove', handleScroll)
-    }
-  }, [activeTab, otherDeptTasksHasMore, isLoadingOtherDept, fetchOtherDepartmentTasks])
+  }, [openActionTaskId])
 
   // Extract unique brands from tasks and projects
   useEffect(() => {
@@ -831,7 +683,7 @@ export default function TasksPage() {
   const resetForm = useCallback(() => {
     setFormData(createInitialFormData())
     setEditingTask(null)
-    setTaskFields([{ title: '', description: '' }])
+    setTaskFields([{ title: '', description: '', imageCount: '', videoCount: '' }])
   }, [])
 
   const fetchAssignableMembers = useCallback(async (search?: string) => {
@@ -860,6 +712,11 @@ export default function TasksPage() {
   }, [resetForm, user?.role, fetchAssignableMembers])
 
   const openEditDialog = useCallback((task: Task) => {
+    // Save scroll position before opening dialog
+    const scrollY = window.scrollY
+    if (typeof window !== 'undefined') {
+      (window as any).__preservedScrollY = scrollY
+    }
     setEditingTask(task)
     // Get the first assignee ID if available
     const firstAssigneeId = task.assignees && task.assignees.length > 0 ? task.assignees[0].user.id : ''
@@ -879,8 +736,12 @@ export default function TasksPage() {
       videoCount: task.videoCount != null ? String(task.videoCount) : '',
       link: task.link || '',
     })
-    setTaskFields([{ title: task.title, description: task.description || '' }])
+    setTaskFields([{ title: task.title, description: task.description || '', imageCount: '', videoCount: '' }])
     setIsDialogOpen(true)
+    // Restore scroll position after dialog opens
+    requestAnimationFrame(() => {
+      window.scrollTo(0, scrollY)
+    })
     // Fetch assignable members when opening dialog
     if (user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
       fetchAssignableMembers().then(() => {
@@ -928,6 +789,7 @@ export default function TasksPage() {
 
       setIsSavingTask(true)
 
+      // Send tasks as an array instead of comma-separated strings
       const parseCountInput = (value: string) => {
         if (!value || value.trim() === '') return 0
         const num = Number(value)
@@ -935,14 +797,23 @@ export default function TasksPage() {
         return Math.round(num)
       }
 
-      // Convert taskFields array to comma-separated strings for backend
-      const titles = validFields.map(field => field.title.trim()).join(',')
-      // Join descriptions - empty strings are preserved to maintain index mapping
-      const descriptions = validFields.map(field => field.description.trim()).join(',')
+      const tasks = validFields.map(field => {
+        const taskData: any = {
+          title: field.title.trim(),
+          description: field.description.trim() || null,
+        }
+        
+        // Add imageCount and videoCount only for New Product Design department
+        if (shouldShowMediaFields) {
+          taskData.imageCount = parseCountInput(field.imageCount)
+          taskData.videoCount = parseCountInput(field.videoCount)
+        }
+        
+        return taskData
+      })
 
       const cleanData: any = {
-        title: titles,
-        description: descriptions || null,
+        tasks: tasks,
         status: formData.status,
         priority: formData.priority,
         startDate: formData.startDate && formData.startDate.trim() !== '' ? formData.startDate : null,
@@ -953,8 +824,6 @@ export default function TasksPage() {
         recurring: formData.recurring && formData.recurring !== 'none' && formData.recurring.trim() !== '' 
           ? formData.recurring 
           : null,
-        imageCount: parseCountInput(formData.imageCount),
-        videoCount: parseCountInput(formData.videoCount),
         link: formData.link?.trim() || null,
       }
 
@@ -976,7 +845,14 @@ export default function TasksPage() {
       }
       
       closeDialog()
-      await Promise.all([fetchTasks(), fetchProjects()])
+      
+      // Auto-refresh task lists after creation
+      await Promise.all([
+        fetchTasks(),
+        fetchTeamTasks(),
+        fetchReviewTasks(),
+      ])
+      
       // Refresh notifications immediately
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('refreshNotifications'))
@@ -987,7 +863,7 @@ export default function TasksPage() {
     } finally {
       setIsSavingTask(false)
     }
-  }, [taskFields, formData, closeDialog, fetchTasks, fetchProjects, user?.role, isSavingTask])
+  }, [taskFields, formData, closeDialog, fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchProjects, user?.role, isSavingTask, shouldShowMediaFields])
 
   const handleUpdateTask = useCallback(async () => {
     if (!editingTask) return
@@ -1034,9 +910,7 @@ export default function TasksPage() {
 
       await apiClient.updateTask(editingTask.id, cleanData)
       closeDialog()
-      // Force refresh all task lists to ensure status updates are reflected immediately
-      await fetchTasks()
-      await fetchProjects()
+      // Auto-refresh removed - no automatic refresh on update
       // Refresh notifications immediately
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('refreshNotifications'))
@@ -1047,57 +921,191 @@ export default function TasksPage() {
     } finally {
       setIsSavingTask(false)
     }
-  }, [editingTask, formData, closeDialog, fetchTasks, fetchProjects, user?.role, isSavingTask])
+  }, [editingTask, formData, closeDialog, fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchProjects, user?.role, isSavingTask])
+
+  const handleDuplicateTask = useCallback(async (task: Task) => {
+    // Prevent double-clicks and multiple API calls
+    if (duplicatingTaskId === task.id) return
+    
+    try {
+      setDuplicatingTaskId(task.id)
+      
+      const parseCountInput = (value: number | undefined) => {
+        if (value === undefined || value === null) return 0
+        const num = Number(value)
+        if (!Number.isFinite(num) || num < 0) return 0
+        return Math.round(num)
+      }
+
+      // Format dates for API
+      const formatDate = (date: Date | string | null | undefined) => {
+        if (!date) return null
+        const dateObj = date instanceof Date ? date : new Date(date)
+        if (isNaN(dateObj.getTime())) return null
+        return dateObj.toISOString().split('T')[0]
+      }
+
+      // Get assignee IDs if user is admin/super admin
+      const assigneeIds = task.assignees && task.assignees.length > 0 && 
+        user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')
+        ? task.assignees.map(a => a.user.id)
+        : []
+
+      const cleanData: any = {
+        tasks: [{
+          title: `Copy of ${task.title}`,
+          description: task.description || null,
+        }],
+        status: task.status,
+        priority: task.priority,
+        startDate: formatDate(task.startDate),
+        dueDate: formatDate(task.dueDate),
+        projectId: task.projectId || null,
+        brand: task.brand || null,
+        tags: task.tags || null,
+        recurring: task.recurring || null,
+        imageCount: parseCountInput(task.imageCount),
+        videoCount: parseCountInput(task.videoCount),
+        link: task.link || null,
+      }
+
+      // Add assignees if available
+      if (assigneeIds.length > 0) {
+        cleanData.assignees = assigneeIds
+      }
+
+      const result = await apiClient.createTask(cleanData)
+      
+      if (result.tasks && Array.isArray(result.tasks)) {
+        alert(`Task duplicated successfully!`)
+      } else if (result.id) {
+        alert('Task duplicated successfully!')
+      }
+      
+      // Refresh notifications
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('refreshNotifications'))
+      }
+    } catch (error: any) {
+      console.error('Failed to duplicate task:', error)
+      alert(error.message || 'Failed to duplicate task')
+    } finally {
+      setDuplicatingTaskId(null)
+    }
+  }, [user?.role, duplicatingTaskId])
 
   const handleDeleteTask = useCallback(async (taskId: string) => {
     if (!confirm('Are you sure you want to delete this task?')) return
     try {
       await apiClient.deleteTask(taskId)
-      fetchTasks()
+      
+      // Auto-refresh task lists after deletion
+      await Promise.all([
+        fetchTasks(),
+        fetchTeamTasks(),
+        fetchReviewTasks(),
+      ])
+      
+      // Refresh notifications immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('refreshNotifications'))
+      }
     } catch (error) {
       console.error('Failed to delete task:', error)
       alert('Failed to delete task')
     }
-  }, [])
+  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchProjects])
 
   const handleMarkComplete = useCallback(async (taskId: string) => {
     try {
       await apiClient.updateTask(taskId, { status: 'COMPLETED' })
-      await fetchTasks()
+      
+      // Auto-refresh task lists after status update
+      await Promise.all([
+        fetchTasks(),
+        fetchTeamTasks(),
+        fetchReviewTasks(),
+      ])
+      
+      // Refresh notifications immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('refreshNotifications'))
+      }
     } catch (error) {
       console.error('Failed to update task:', error)
       alert('Failed to update task')
     }
-  }, [fetchTasks])
+  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks])
 
   const handleQuickStatusUpdate = useCallback(async (taskId: string, newStatus: TaskStatus) => {
     try {
       await apiClient.updateTask(taskId, { status: newStatus })
-      await fetchTasks()
+      
+      // Auto-refresh task lists after status update
+      await Promise.all([
+        fetchTasks(),
+        fetchTeamTasks(),
+        fetchReviewTasks(),
+      ])
+      
+      // Refresh notifications immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('refreshNotifications'))
+      }
     } catch (error) {
       console.error('Failed to update task status:', error)
       alert('Failed to update task status')
     }
-  }, [fetchTasks])
+  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks])
 
   const openCommentDialog = useCallback(async (task: Task) => {
+    // Save scroll position before opening dialog
+    const scrollY = window.scrollY
+    if (typeof window !== 'undefined') {
+      (window as any).__preservedScrollY = scrollY
+    }
     setSelectedTaskForComment(task)
     setIsCommentDialogOpen(true)
     setCommentText('')
+    
+    // Multiple restoration attempts
+    const restoreScroll = () => {
+      if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+        window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+      }
+    }
+    restoreScroll()
+    requestAnimationFrame(restoreScroll)
+    setTimeout(restoreScroll, 0)
+    setTimeout(restoreScroll, 10)
+    setTimeout(restoreScroll, 50)
+    
     try {
       const taskComments = await apiClient.getTaskComments(task.id)
       setComments(taskComments)
       lastCommentCountRef.current = taskComments.length
-      // Scroll to bottom when opening
+      // Scroll to bottom when opening (only in comment container, not page)
       setTimeout(() => {
         if (commentsContainerRef.current) {
           commentsContainerRef.current.scrollTop = commentsContainerRef.current.scrollHeight
         }
+        // Restore page scroll position
+        restoreScroll()
+        setTimeout(restoreScroll, 0)
+        setTimeout(restoreScroll, 10)
+        setTimeout(restoreScroll, 50)
+        setTimeout(restoreScroll, 100)
       }, 100)
     } catch (error) {
       console.error('Failed to fetch comments:', error)
       setComments([])
       lastCommentCountRef.current = 0
+      // Restore scroll position even on error
+      restoreScroll()
+      requestAnimationFrame(restoreScroll)
+      setTimeout(restoreScroll, 0)
+      setTimeout(restoreScroll, 10)
+      setTimeout(restoreScroll, 50)
     }
   }, [])
 
@@ -1183,8 +1191,26 @@ export default function TasksPage() {
   }, [openCommentDialog, tasks, teamTasks, reviewTasks])
 
   const openReviewDialog = useCallback((task: Task) => {
+    // Save scroll position before opening dialog
+    const scrollY = window.scrollY
+    if (typeof window !== 'undefined') {
+      (window as any).__preservedScrollY = scrollY
+    }
     setSelectedTaskForComment(task)
     setIsReviewDialogOpen(true)
+    // Multiple restoration attempts
+    const restoreScroll = () => {
+      if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+        window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+      }
+    }
+    restoreScroll()
+    requestAnimationFrame(restoreScroll)
+    setTimeout(restoreScroll, 0)
+    setTimeout(restoreScroll, 10)
+    setTimeout(restoreScroll, 50)
+    setTimeout(restoreScroll, 100)
+    setTimeout(restoreScroll, 200)
   }, [])
 
   const handleSendComment = useCallback(async () => {
@@ -1221,8 +1247,12 @@ export default function TasksPage() {
           commentsContainerRef.current.scrollTop = commentsContainerRef.current.scrollHeight
         }
       }, 100)
-      // Refresh tasks
-      await fetchTasks()
+      // Refresh all task lists
+      await Promise.all([
+        fetchTasks(),
+        fetchTeamTasks(),
+        fetchReviewTasks(),
+      ])
       // Refresh notifications immediately (for mentions)
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('refreshNotifications'))
@@ -1231,7 +1261,7 @@ export default function TasksPage() {
       console.error('Failed to send comment:', error)
       alert(error.message || 'Failed to send comment')
     }
-  }, [selectedTaskForComment, commentText, allUsers, fetchTasks])
+  }, [selectedTaskForComment, commentText, allUsers, fetchTasks, fetchTeamTasks, fetchReviewTasks])
 
   const handleRequestReview = useCallback(async (reviewerId: string) => {
     if (!selectedTaskForComment) return
@@ -1240,7 +1270,7 @@ export default function TasksPage() {
       await apiClient.requestReview(selectedTaskForComment.id, reviewerId)
       setIsReviewDialogOpen(false)
       setSelectedTaskForComment(null)
-      await fetchTasks()
+      // Auto-refresh removed - no automatic refresh on review request
       // Refresh notifications immediately
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('refreshNotifications'))
@@ -1250,7 +1280,7 @@ export default function TasksPage() {
       console.error('Failed to request review:', error)
       alert(error.message || 'Failed to request review')
     }
-  }, [selectedTaskForComment, fetchTasks])
+  }, [selectedTaskForComment, fetchTasks, fetchTeamTasks, fetchReviewTasks])
 
   const handleRespondToReview = useCallback(async (action: 'APPROVED' | 'REJECTED', comment?: string) => {
     if (!selectedTaskForComment) return
@@ -1259,7 +1289,7 @@ export default function TasksPage() {
       await apiClient.respondToReview(selectedTaskForComment.id, action, comment)
       setIsReviewDialogOpen(false)
       setSelectedTaskForComment(null)
-      await fetchTasks()
+      // Auto-refresh removed - no automatic refresh on review response
       // Refresh notifications immediately
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('refreshNotifications'))
@@ -1269,7 +1299,7 @@ export default function TasksPage() {
       console.error('Failed to respond to review:', error)
       alert(error.message || 'Failed to respond to review')
     }
-  }, [selectedTaskForComment, fetchTasks])
+  }, [selectedTaskForComment, fetchTasks, fetchTeamTasks, fetchReviewTasks])
 
   const handleAcceptReviewRequest = useCallback(async (taskId: string) => {
     // Prevent double-clicks
@@ -1278,27 +1308,7 @@ export default function TasksPage() {
     try {
       setAcceptingTaskId(taskId)
       await apiClient.acceptReviewRequest(taskId, true)
-      // Refresh all tasks including review tasks immediately
-      await fetchTasks()
-      // Also refresh review tasks specifically after a short delay to ensure backend has updated
-      setTimeout(async () => {
-        try {
-          const reviewTasksData = await apiClient.getReviewTasks()
-          const tasksArray = reviewTasksData.tasks || []
-          setReviewTasks(tasksArray as Task[])
-          console.log('Refreshed review tasks after accept:', {
-            count: tasksArray.length,
-            tasks: tasksArray.map(t => ({
-              id: t.id,
-              title: t.title,
-              reviewStatus: t.reviewStatus,
-              reviewerId: t.reviewerId,
-            })),
-          })
-        } catch (error) {
-          console.error('Failed to refresh review tasks:', error)
-        }
-      }, 500)
+      // Auto-refresh removed - no automatic refresh on accept review
       // Close notification popover if open
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('refreshNotifications'))
@@ -1310,7 +1320,7 @@ export default function TasksPage() {
     } finally {
       setAcceptingTaskId(null)
     }
-  }, [fetchTasks, acceptingTaskId])
+  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks, acceptingTaskId])
 
   const handleCancelReviewRequest = useCallback(async (taskId: string) => {
     // Prevent double-clicks
@@ -1321,7 +1331,7 @@ export default function TasksPage() {
     try {
       setCancellingTaskId(taskId)
       await apiClient.acceptReviewRequest(taskId, false)
-      await fetchTasks()
+      // Auto-refresh removed - no automatic refresh on cancel review
       // Close notification popover if open
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('refreshNotifications'))
@@ -1333,7 +1343,7 @@ export default function TasksPage() {
     } finally {
       setCancellingTaskId(null)
     }
-  }, [fetchTasks, cancellingTaskId])
+  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks, cancellingTaskId])
 
   const handleCommentTextChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value
@@ -1407,30 +1417,210 @@ export default function TasksPage() {
     return colors[priority] || colors.MEDIUM
   }
 
+  // Pagination component
+  const PaginationControls = ({ 
+    currentPage, 
+    totalPages, 
+    itemsPerPage, 
+    totalItems,
+    onPageChange, 
+    onItemsPerPageChange 
+  }: {
+    currentPage: number
+    totalPages: number
+    itemsPerPage: number
+    totalItems: number
+    onPageChange: (page: number) => void
+    onItemsPerPageChange: (items: number) => void
+  }) => {
+    const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1)
+    
+    return (
+      <div className="flex items-center justify-between mt-4 px-2">
+        <div className="flex items-center gap-2">
+          <Select value={String(itemsPerPage)} onValueChange={(value) => onItemsPerPageChange(Number(value))}>
+            <SelectTrigger className="w-20 h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="10">10</SelectItem>
+              <SelectItem value="20">20</SelectItem>
+              <SelectItem value="50">50</SelectItem>
+              <SelectItem value="100">100</SelectItem>
+            </SelectContent>
+          </Select>
+          <span className="text-sm text-muted-foreground">items per page</span>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          <Select value={String(currentPage)} onValueChange={(value) => onPageChange(Number(value))}>
+            <SelectTrigger className="w-20 h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {pageNumbers.map((page) => (
+                <SelectItem key={page} value={String(page)}>
+                  {page}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="text-sm text-muted-foreground">of {totalPages} pages</span>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+            disabled={currentPage === 1}
+            className="h-9"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+            disabled={currentPage === totalPages}
+            className="h-9"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   const renderTaskActions = (task: Task) => {
     const actionItemClass =
       'flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors hover:bg-black hover:text-white'
     const disabledActionClass = 'disabled:opacity-50 disabled:hover:bg-black/80 disabled:hover:text-white'
 
     return (
-    <Popover open={openActionTaskId === task.id} onOpenChange={(open) => setOpenActionTaskId(open ? task.id : null)}>
+    <Popover 
+      modal={false}
+      open={openActionTaskId === task.id} 
+      onOpenChange={(open) => {
+        if (open) {
+          setOpenActionTaskId(task.id)
+        } else {
+          setOpenActionTaskId(null)
+          
+          // Restore scroll position when popover closes
+          if (typeof window !== 'undefined') {
+            const preserved = (window as any).__preservedScrollY
+            if (preserved !== undefined) {
+              // Restore scrollIntoView if it was overridden
+              if ((window as any).__originalScrollIntoView) {
+                Element.prototype.scrollIntoView = (window as any).__originalScrollIntoView
+                delete (window as any).__originalScrollIntoView
+              }
+              
+              // Restore scroll position immediately
+              requestAnimationFrame(() => {
+                window.scrollTo({ top: preserved, behavior: 'instant' })
+                // Also restore after a small delay to ensure it sticks
+                setTimeout(() => {
+                  window.scrollTo({ top: preserved, behavior: 'instant' })
+                }, 0)
+                delete (window as any).__preservedScrollY
+              })
+            }
+          }
+        }
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
+          type="button"
           variant="ghost"
           size="icon"
           title="Task actions"
           className="text-muted-foreground hover:bg-black hover:text-white"
+          onClick={(e) => {
+            e.stopPropagation()
+            
+            // Prevent rapid clicks (debounce)
+            const now = Date.now()
+            if (lastMenuClickRef.current && 
+                lastMenuClickRef.current.taskId === task.id && 
+                now - lastMenuClickRef.current.timestamp < 300) {
+              return // Ignore rapid clicks within 300ms
+            }
+            lastMenuClickRef.current = { taskId: task.id, timestamp: now }
+            
+            // Preserve scroll position before popover opens
+            const scrollTop = window.pageYOffset || document.documentElement.scrollTop
+            if (typeof window !== 'undefined') {
+              (window as any).__preservedScrollY = scrollTop
+              
+              // Override scrollIntoView to prevent Radix UI from scrolling
+              if (!(window as any).__originalScrollIntoView) {
+                const originalScrollIntoView = Element.prototype.scrollIntoView
+                Element.prototype.scrollIntoView = function() {
+                  // Do nothing - prevent ALL scrollIntoView calls
+                }
+                ;(window as any).__originalScrollIntoView = originalScrollIntoView
+              }
+            }
+          }}
         >
           <MoreVertical className="h-4 w-4" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-56 p-2" align="end">
+      <PopoverContent 
+        className="w-56 p-2" 
+        align="end"
+        side="bottom"
+        sideOffset={5}
+        avoidCollisions={false}
+        collisionPadding={0}
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          // Prevent any scroll when opening
+          if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+            window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+          }
+        }}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+        }}
+        onEscapeKeyDown={(e) => {
+          setOpenActionTaskId(null)
+        }}
+        onInteractOutside={(e) => {
+          // Allow default behavior - clicking outside closes the popover
+        }}
+      >
         <div className="space-y-1">
           <div className="text-xs font-semibold text-muted-foreground px-2 py-1">Task Options</div>
           <button
-            onClick={() => {
+            type="button"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              const scrollY = window.scrollY
+              if (typeof window !== 'undefined') {
+                (window as any).__preservedScrollY = scrollY
+              }
               openCommentDialog(task)
               setOpenActionTaskId(null)
+              // Multiple restoration attempts
+              const restoreScroll = () => {
+                if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+                  window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+                }
+              }
+              restoreScroll()
+              requestAnimationFrame(restoreScroll)
+              setTimeout(restoreScroll, 0)
+              setTimeout(restoreScroll, 10)
+              setTimeout(restoreScroll, 50)
+              setTimeout(restoreScroll, 100)
+              setTimeout(restoreScroll, 200)
             }}
             className={actionItemClass}
           >
@@ -1439,9 +1629,29 @@ export default function TasksPage() {
           </button>
           {task.reviewStatus !== 'REVIEW_REQUESTED' && (
             <button
-              onClick={() => {
+              type="button"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const scrollY = window.scrollY
+                if (typeof window !== 'undefined') {
+                  (window as any).__preservedScrollY = scrollY
+                }
                 openReviewDialog(task)
                 setOpenActionTaskId(null)
+                // Multiple restoration attempts
+                const restoreScroll = () => {
+                  if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+                    window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+                  }
+                }
+                restoreScroll()
+                requestAnimationFrame(restoreScroll)
+                setTimeout(restoreScroll, 0)
+                setTimeout(restoreScroll, 10)
+                setTimeout(restoreScroll, 50)
+                setTimeout(restoreScroll, 100)
+                setTimeout(restoreScroll, 200)
               }}
               className={actionItemClass}
             >
@@ -1452,9 +1662,29 @@ export default function TasksPage() {
           {task.reviewStatus === 'REVIEW_REQUESTED' && task.reviewerId === user?.id && (
             <>
               <button
-                onClick={() => {
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  const scrollY = window.scrollY
+                  if (typeof window !== 'undefined') {
+                    (window as any).__preservedScrollY = scrollY
+                  }
                   handleAcceptReviewRequest(task.id)
                   setOpenActionTaskId(null)
+                  // Multiple restoration attempts
+                  const restoreScroll = () => {
+                    if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+                      window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+                    }
+                  }
+                  restoreScroll()
+                  requestAnimationFrame(restoreScroll)
+                  setTimeout(restoreScroll, 0)
+                  setTimeout(restoreScroll, 10)
+                  setTimeout(restoreScroll, 50)
+                  setTimeout(restoreScroll, 100)
+                  setTimeout(restoreScroll, 200)
                 }}
                 disabled={acceptingTaskId === task.id}
                 className={`${actionItemClass} ${disabledActionClass}`}
@@ -1463,9 +1693,29 @@ export default function TasksPage() {
                 Accept Review Request
               </button>
               <button
-                onClick={() => {
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  const scrollY = window.scrollY
+                  if (typeof window !== 'undefined') {
+                    (window as any).__preservedScrollY = scrollY
+                  }
                   handleCancelReviewRequest(task.id)
                   setOpenActionTaskId(null)
+                  // Multiple restoration attempts
+                  const restoreScroll = () => {
+                    if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+                      window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+                    }
+                  }
+                  restoreScroll()
+                  requestAnimationFrame(restoreScroll)
+                  setTimeout(restoreScroll, 0)
+                  setTimeout(restoreScroll, 10)
+                  setTimeout(restoreScroll, 50)
+                  setTimeout(restoreScroll, 100)
+                  setTimeout(restoreScroll, 200)
                 }}
                 disabled={cancellingTaskId === task.id}
                 className={`${actionItemClass} ${disabledActionClass}`}
@@ -1476,9 +1726,29 @@ export default function TasksPage() {
             </>
           )}
           <button
-            onClick={() => {
+            type="button"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              const scrollY = window.scrollY
+              if (typeof window !== 'undefined') {
+                (window as any).__preservedScrollY = scrollY
+              }
               openEditDialog(task)
               setOpenActionTaskId(null)
+              // Multiple restoration attempts
+              const restoreScroll = () => {
+                if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+                  window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+                }
+              }
+              restoreScroll()
+              requestAnimationFrame(restoreScroll)
+              setTimeout(restoreScroll, 0)
+              setTimeout(restoreScroll, 10)
+              setTimeout(restoreScroll, 50)
+              setTimeout(restoreScroll, 100)
+              setTimeout(restoreScroll, 200)
             }}
             className={actionItemClass}
           >
@@ -1486,9 +1756,29 @@ export default function TasksPage() {
             Edit Task
           </button>
           <button
-            onClick={() => {
+            type="button"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              const scrollY = window.scrollY
+              if (typeof window !== 'undefined') {
+                (window as any).__preservedScrollY = scrollY
+              }
               handleDeleteTask(task.id)
               setOpenActionTaskId(null)
+              // Multiple restoration attempts
+              const restoreScroll = () => {
+                if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+                  window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+                }
+              }
+              restoreScroll()
+              requestAnimationFrame(restoreScroll)
+              setTimeout(restoreScroll, 0)
+              setTimeout(restoreScroll, 10)
+              setTimeout(restoreScroll, 50)
+              setTimeout(restoreScroll, 100)
+              setTimeout(restoreScroll, 200)
             }}
             className={`${actionItemClass} text-red-600`}
           >
@@ -2054,8 +2344,24 @@ export default function TasksPage() {
               transition={{ duration: 0.3 }}
             >
               {renderTasks(filteredTeamTasks)}
-              {teamTasksHasMore && (
-                <div id="team-tasks-sentinel" className="h-1" />
+              {!isInitialLoadingTeamTasks && filteredTeamTasks.length > 0 && (
+                <PaginationControls
+                  currentPage={teamTasksPage}
+                  totalPages={Math.ceil(teamTasksTotal / teamTasksItemsPerPage) || 1}
+                  itemsPerPage={teamTasksItemsPerPage}
+                  totalItems={teamTasksTotal}
+                  onPageChange={async (page) => {
+                    setTeamTasksPage(page)
+                    // Manually fetch only when page changes
+                    await fetchTeamTasks()
+                  }}
+                  onItemsPerPageChange={async (items) => {
+                    setTeamTasksItemsPerPage(items)
+                    setTeamTasksPage(1)
+                    // Manually fetch only when items per page changes
+                    await fetchTeamTasks()
+                  }}
+                />
               )}
               {isLoadingTeamTasks && (
                 <div className="flex justify-center py-4">
@@ -2110,10 +2416,49 @@ export default function TasksPage() {
 
         <Dialog open={isDialogOpen} onOpenChange={(open) => {
           if (!open) {
+            const scrollY = window.scrollY
+            if (typeof window !== 'undefined') {
+              (window as any).__preservedScrollY = scrollY
+            }
             closeDialog()
+            // Multiple restoration attempts
+            const restoreScroll = () => {
+              if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+                window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+              }
+            }
+            restoreScroll()
+            requestAnimationFrame(restoreScroll)
+            setTimeout(restoreScroll, 0)
+            setTimeout(restoreScroll, 10)
+            setTimeout(restoreScroll, 50)
+            setTimeout(restoreScroll, 100)
+          } else {
+            // Save scroll when opening
+            const scrollY = window.scrollY
+            if (typeof window !== 'undefined') {
+              (window as any).__preservedScrollY = scrollY
+            }
           }
         }}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogContent 
+            className="max-w-2xl max-h-[90vh] overflow-y-auto"
+            onOpenAutoFocus={(e) => {
+              e.preventDefault()
+              const scrollY = typeof window !== 'undefined' ? ((window as any).__preservedScrollY || window.scrollY) : 0
+              if (typeof window !== 'undefined') {
+                (window as any).__preservedScrollY = scrollY
+                window.scrollTo({ top: scrollY, behavior: 'instant' })
+              }
+            }}
+            onCloseAutoFocus={(e) => {
+              e.preventDefault()
+              const scrollY = typeof window !== 'undefined' ? ((window as any).__preservedScrollY || window.scrollY) : 0
+              if (typeof window !== 'undefined') {
+                window.scrollTo({ top: scrollY, behavior: 'instant' })
+              }
+            }}
+          >
             <DialogHeader>
               <DialogTitle>{editingTask ? 'Edit Task' : 'Create New Task'}</DialogTitle>
               <DialogDescription>
@@ -2192,6 +2537,44 @@ export default function TasksPage() {
                                 placeholder="Enter task description (optional)"
                               />
                             </div>
+                            {shouldShowMediaFields && (
+                              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <div>
+                                  <Label htmlFor={`imageCount-${index}`}>Images Created</Label>
+                                  <Input
+                                    id={`imageCount-${index}`}
+                                    type="number"
+                                    min={0}
+                                    value={field.imageCount}
+                                    onChange={(e) => {
+                                      const value = e.target.value
+                                      const newFields = taskFields.map((f, i) => 
+                                        i === index ? { ...f, imageCount: value === '' ? '' : value } : f
+                                      )
+                                      setTaskFields(newFields)
+                                    }}
+                                    placeholder="Enter image count"
+                                  />
+                                </div>
+                                <div>
+                                  <Label htmlFor={`videoCount-${index}`}>Videos Created</Label>
+                                  <Input
+                                    id={`videoCount-${index}`}
+                                    type="number"
+                                    min={0}
+                                    value={field.videoCount}
+                                    onChange={(e) => {
+                                      const value = e.target.value
+                                      const newFields = taskFields.map((f, i) => 
+                                        i === index ? { ...f, videoCount: value === '' ? '' : value } : f
+                                      )
+                                      setTaskFields(newFields)
+                                    }}
+                                    placeholder="Enter video count"
+                                  />
+                                </div>
+                              </div>
+                            )}
                           </div>
                           {taskFields.length > 1 && (
                             <Button
@@ -2214,7 +2597,7 @@ export default function TasksPage() {
                       type="button"
                       variant="outline"
                       onClick={() => {
-                        setTaskFields([...taskFields, { title: '', description: '' }])
+                        setTaskFields([...taskFields, { title: '', description: '', imageCount: '', videoCount: '' }])
                       }}
                       className="w-full"
                     >
@@ -2225,7 +2608,7 @@ export default function TasksPage() {
                 </div>
               )}
 
-              {shouldShowMediaFields && (
+              {shouldShowMediaFields && editingTask && (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
                     <Label htmlFor="imageCount">Images Created</Label>
@@ -2588,6 +2971,10 @@ export default function TasksPage() {
 
         {/* Comment Dialog */}
         <Dialog open={isCommentDialogOpen} onOpenChange={(open) => {
+          const scrollY = window.scrollY
+          if (typeof window !== 'undefined') {
+            (window as any).__preservedScrollY = scrollY
+          }
           setIsCommentDialogOpen(open)
           if (!open) {
             // Reset when dialog closes
@@ -2595,8 +2982,37 @@ export default function TasksPage() {
             setComments([])
             setSelectedTaskForComment(null)
           }
+          // Multiple restoration attempts
+          const restoreScroll = () => {
+            if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+              window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+            }
+          }
+          restoreScroll()
+          requestAnimationFrame(restoreScroll)
+          setTimeout(restoreScroll, 0)
+          setTimeout(restoreScroll, 10)
+          setTimeout(restoreScroll, 50)
+          setTimeout(restoreScroll, 100)
         }}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogContent 
+            className="max-w-2xl max-h-[90vh] overflow-y-auto"
+            onOpenAutoFocus={(e) => {
+              e.preventDefault()
+              const scrollY = typeof window !== 'undefined' ? ((window as any).__preservedScrollY || window.scrollY) : 0
+              if (typeof window !== 'undefined') {
+                (window as any).__preservedScrollY = scrollY
+                window.scrollTo({ top: scrollY, behavior: 'instant' })
+              }
+            }}
+            onCloseAutoFocus={(e) => {
+              e.preventDefault()
+              const scrollY = typeof window !== 'undefined' ? ((window as any).__preservedScrollY || window.scrollY) : 0
+              if (typeof window !== 'undefined') {
+                window.scrollTo({ top: scrollY, behavior: 'instant' })
+              }
+            }}
+          >
             <DialogHeader>
               <DialogTitle>Comments & Chat</DialogTitle>
               <DialogDescription>
@@ -2678,8 +3094,42 @@ export default function TasksPage() {
         </Dialog>
 
         {/* Review Dialog */}
-        <Dialog open={isReviewDialogOpen} onOpenChange={setIsReviewDialogOpen}>
-          <DialogContent>
+        <Dialog open={isReviewDialogOpen} onOpenChange={(open) => {
+          const scrollY = window.scrollY
+          if (typeof window !== 'undefined') {
+            (window as any).__preservedScrollY = scrollY
+          }
+          setIsReviewDialogOpen(open)
+          // Multiple restoration attempts
+          const restoreScroll = () => {
+            if (typeof window !== 'undefined' && (window as any).__preservedScrollY !== undefined) {
+              window.scrollTo({ top: (window as any).__preservedScrollY, behavior: 'instant' })
+            }
+          }
+          restoreScroll()
+          requestAnimationFrame(restoreScroll)
+          setTimeout(restoreScroll, 0)
+          setTimeout(restoreScroll, 10)
+          setTimeout(restoreScroll, 50)
+          setTimeout(restoreScroll, 100)
+        }}>
+          <DialogContent
+            onOpenAutoFocus={(e) => {
+              e.preventDefault()
+              const scrollY = typeof window !== 'undefined' ? ((window as any).__preservedScrollY || window.scrollY) : 0
+              if (typeof window !== 'undefined') {
+                (window as any).__preservedScrollY = scrollY
+                window.scrollTo({ top: scrollY, behavior: 'instant' })
+              }
+            }}
+            onCloseAutoFocus={(e) => {
+              e.preventDefault()
+              const scrollY = typeof window !== 'undefined' ? ((window as any).__preservedScrollY || window.scrollY) : 0
+              if (typeof window !== 'undefined') {
+                window.scrollTo({ top: scrollY, behavior: 'instant' })
+              }
+            }}
+          >
             <DialogHeader>
               <DialogTitle>
                 {selectedTaskForComment?.reviewStatus === 'UNDER_REVIEW' 
@@ -2822,13 +3272,24 @@ export default function TasksPage() {
                   </motion.div>
                 )}
               </AnimatePresence>
-              {!isInitialLoadingMyTasks && myTasksHasMore && (
-                <div id="my-tasks-sentinel" className="h-1" />
-              )}
-              {!isInitialLoadingMyTasks && isLoadingMyTasks && (
-                <div className="flex justify-center py-4">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
+              {!isInitialLoadingMyTasks && tasks.length > 0 && (
+                <PaginationControls
+                  currentPage={myTasksPage}
+                  totalPages={Math.ceil(myTasksTotal / myTasksItemsPerPage) || 1}
+                  itemsPerPage={myTasksItemsPerPage}
+                  totalItems={myTasksTotal}
+                  onPageChange={async (page) => {
+                    setMyTasksPage(page)
+                    // Manually fetch only when page changes
+                    await fetchTasks()
+                  }}
+                  onItemsPerPageChange={async (items) => {
+                    setMyTasksItemsPerPage(items)
+                    setMyTasksPage(1)
+                    // Manually fetch only when items per page changes
+                    await fetchTasks()
+                  }}
+                />
               )}
             </div>
           </TabsContent>
@@ -2888,8 +3349,24 @@ export default function TasksPage() {
                   </motion.div>
                 )}
               </AnimatePresence>
-              {!isInitialLoadingReviewTasks && reviewTasksHasMore && (
-                <div id="review-tasks-sentinel" className="h-1" />
+              {!isInitialLoadingReviewTasks && reviewTasks.length > 0 && (
+                <PaginationControls
+                  currentPage={reviewTasksPage}
+                  totalPages={Math.ceil(reviewTasksTotal / reviewTasksItemsPerPage) || 1}
+                  itemsPerPage={reviewTasksItemsPerPage}
+                  totalItems={reviewTasksTotal}
+                  onPageChange={async (page) => {
+                    setReviewTasksPage(page)
+                    // Manually fetch only when page changes
+                    await fetchReviewTasks()
+                  }}
+                  onItemsPerPageChange={async (items) => {
+                    setReviewTasksItemsPerPage(items)
+                    setReviewTasksPage(1)
+                    // Manually fetch only when items per page changes
+                    await fetchReviewTasks()
+                  }}
+                />
               )}
               {!isInitialLoadingReviewTasks && isLoadingReviewTasks && (
                 <div className="flex justify-center py-4">
@@ -2968,8 +3445,24 @@ export default function TasksPage() {
                     transition={{ duration: 0.3 }}
                   >
                     {renderTasks(otherDepartmentTasks)}
-                    {otherDeptTasksHasMore && (
-                      <div id="other-dept-tasks-sentinel" className="h-1" />
+                    {!isInitialLoadingOtherDept && otherDepartmentTasks.length > 0 && (
+                      <PaginationControls
+                        currentPage={otherDeptTasksPage}
+                        totalPages={Math.ceil(otherDeptTasksTotal / otherDeptTasksItemsPerPage) || 1}
+                        itemsPerPage={otherDeptTasksItemsPerPage}
+                        totalItems={otherDeptTasksTotal}
+                  onPageChange={async (page) => {
+                    setOtherDeptTasksPage(page)
+                    // Manually fetch only when page changes
+                    await fetchOtherDepartmentTasks()
+                  }}
+                  onItemsPerPageChange={async (items) => {
+                    setOtherDeptTasksItemsPerPage(items)
+                    setOtherDeptTasksPage(1)
+                    // Manually fetch only when items per page changes
+                    await fetchOtherDepartmentTasks()
+                  }}
+                      />
                     )}
                     {isLoadingOtherDept && (
                       <div className="flex justify-center py-4">

@@ -134,6 +134,7 @@ export function Navbar() {
   const [pendingSubscriptionCollabRequestIds, setPendingSubscriptionCollabRequestIds] = useState<Set<string>>(new Set())
   const [cancelledSubscriptionCollabRequestIds, setCancelledSubscriptionCollabRequestIds] = useState<Set<string>>(new Set())
   const [acceptedSubscriptionCollabRequestIds, setAcceptedSubscriptionCollabRequestIds] = useState<Set<string>>(new Set())
+  const [failedTaskIds, setFailedTaskIds] = useState<Set<string>>(new Set()) // Track tasks that don't exist to avoid repeated 404s
   const [isAIDialogOpen, setIsAIDialogOpen] = useState(false)
   const [aiQuery, setAiQuery] = useState('')
   const [aiResponse, setAiResponse] = useState<AIResponse | null>(null)
@@ -280,10 +281,20 @@ export function Navbar() {
         n => n.type === 'REQUEST' && n.title === 'Task Review Requested' && n.link
       )
       
+      // Filter out notifications for tasks we know don't exist
+      const validReviewNotifications = reviewNotifications.filter((notification) => {
+        const taskId = notification.link?.split('/tasks/')[1]
+        if (!taskId) return false
+        // Exclude notifications for tasks we know don't exist
+        return !failedTaskIds.has(taskId)
+      })
+      
       // Fetch task details for each review notification to check if already accepted
       const acceptedIds = new Set<string>()
+      const newFailedTaskIds = new Set<string>(failedTaskIds) // Start with existing failed IDs
+      
       await Promise.all(
-        reviewNotifications.map(async (notification) => {
+        validReviewNotifications.map(async (notification) => {
           const taskId = notification.link?.split('/tasks/')[1]
           if (!taskId) return
           
@@ -293,15 +304,21 @@ export function Navbar() {
               acceptedIds.add(taskId)
             }
           } catch (error: any) {
-            // Silently ignore 404 errors (task might have been deleted)
+            // Track failed task IDs to avoid repeated requests
+            newFailedTaskIds.add(taskId)
+            // Silently ignore 404 errors - task was likely deleted
             // Only log unexpected errors (non-404)
-            if (error?.message && !error.message.includes('not found') && !error.message.includes('404')) {
+            if (error?.message && !error.message.includes('not found') && !error.message.includes('404') && !error.message.includes('HTTP error! status: 404')) {
               console.warn('Failed to fetch task for notification:', taskId, error.message)
             }
-            // Don't log anything for expected 404 errors
           }
         })
       )
+      
+      // Update failed task IDs state if any new ones were added
+      if (newFailedTaskIds.size > failedTaskIds.size) {
+        setFailedTaskIds(newFailedTaskIds)
+      }
       
       if (acceptedIds.size > 0) {
         setAcceptedTaskIds(prev => {
@@ -316,7 +333,7 @@ export function Navbar() {
       console.error('Failed to fetch notifications:', error)
       return []
     }
-  }, [])
+  }, [failedTaskIds])
 
   const fetchUnreadCount = useCallback(async () => {
     try {
