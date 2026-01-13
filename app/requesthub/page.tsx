@@ -299,10 +299,10 @@ export default function RequestHubPage() {
         const selectedDept = departments.find(d => d.id === formData.toDepartmentId)
         const departmentIdentifier = selectedDept?.name || formData.toDepartmentId
         
-        const admins = await apiClient.getDepartmentAdmins(departmentIdentifier)
-        setDepartmentAdmins(admins || [])
+        const admins = await apiClient.getDepartmentAdmins(departmentIdentifier) as DepartmentAdmin[] | null | undefined
+        setDepartmentAdmins(Array.isArray(admins) ? admins : [])
         // Reset assignedToId if current selection is not in the new list
-        if (formData.assignedToId && !admins.find(a => a.id === formData.assignedToId)) {
+        if (formData.assignedToId && Array.isArray(admins) && !admins.find(a => a.id === formData.assignedToId)) {
           setFormData(prev => ({ ...prev, assignedToId: '' }))
         }
       } catch (error) {

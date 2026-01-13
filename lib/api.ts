@@ -941,10 +941,6 @@ class ApiClient {
     return result
   }
 
-  async getDepartments() {
-    return this.request('/team/departments')
-  }
-
   async getDepartmentAdmins(departmentIdOrName: string) {
     return this.request(`/requests/department-admins/${encodeURIComponent(departmentIdOrName)}`)
   }
