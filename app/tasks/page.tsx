@@ -909,11 +909,22 @@ export default function TasksPage() {
       }
 
       await apiClient.updateTask(editingTask.id, cleanData)
+      
+      // Auto-refresh task lists after update
+      await Promise.all([
+        fetchTasks(),
+        fetchTeamTasks(),
+        fetchReviewTasks(),
+      ])
+      
       closeDialog()
-      // Auto-refresh removed - no automatic refresh on update
-      // Refresh notifications immediately
+      
+      // Refresh notifications and request hub immediately
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('refreshNotifications'))
+        // Also dispatch request and task update events to sync request hub status
+        window.dispatchEvent(new Event('requestsUpdated'))
+        window.dispatchEvent(new Event('tasksUpdated'))
       }
     } catch (error: any) {
       console.error('Failed to update task:', error)
@@ -1027,9 +1038,12 @@ export default function TasksPage() {
         fetchReviewTasks(),
       ])
       
-      // Refresh notifications immediately
+      // Refresh notifications and request hub immediately
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('refreshNotifications'))
+        // Also dispatch request and task update events to sync request hub status
+        window.dispatchEvent(new Event('requestsUpdated'))
+        window.dispatchEvent(new Event('tasksUpdated'))
       }
     } catch (error) {
       console.error('Failed to update task:', error)
@@ -1048,9 +1062,12 @@ export default function TasksPage() {
         fetchReviewTasks(),
       ])
       
-      // Refresh notifications immediately
+      // Refresh notifications and request hub immediately
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('refreshNotifications'))
+        // Also dispatch request and task update events to sync request hub status
+        window.dispatchEvent(new Event('requestsUpdated'))
+        window.dispatchEvent(new Event('tasksUpdated'))
       }
     } catch (error) {
       console.error('Failed to update task status:', error)

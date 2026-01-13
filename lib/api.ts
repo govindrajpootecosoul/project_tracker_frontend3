@@ -215,7 +215,7 @@ class ApiClient {
       
       // Provide more helpful error messages
       if (response.status === 500) {
-        const detailedMessage = error?.error || error?.message || errorMessage
+        const detailedMessage = error?.error || error?.message || error?.details || errorMessage
         throw new Error(detailedMessage || 'Internal server error. Please check the backend logs.')
       }
       
@@ -879,6 +879,74 @@ class ApiClient {
     // Don't use cache for paginated requests to avoid stale data
     const data = await this.request(endpoint)
     return data
+  }
+
+  // Requests
+  async getSentRequests() {
+    return this.request('/requests/sent')
+  }
+
+  async getReceivedRequests() {
+    return this.request('/requests/received')
+  }
+
+  async createRequest(data: {
+    title: string
+    description: string
+    requestType: 'AUTOMATION' | 'DATA' | 'ACCESS' | 'SUPPORT' | 'OTHER'
+    priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+    toDepartmentId?: string
+    assignedToId?: string
+  }) {
+    const result = await this.request('/requests', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    this.clearCache('/requests')
+    return result
+  }
+
+  async updateRequestStatus(requestId: string, status: 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'IN_PROGRESS' | 'WAITING_INFO' | 'COMPLETED' | 'CLOSED') {
+    const result = await this.request(`/requests/${requestId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    })
+    this.clearCache('/requests')
+    return result
+  }
+
+  async updateRequestDeadline(requestId: string, tentativeDeadline: string | null) {
+    const result = await this.request(`/requests/${requestId}/deadline`, {
+      method: 'PATCH',
+      body: JSON.stringify({ tentativeDeadline }),
+    })
+    this.clearCache('/requests')
+    return result
+  }
+
+  async updateRequestAssignment(requestId: string, assignedToId: string | null) {
+    const result = await this.request(`/requests/${requestId}/assign`, {
+      method: 'PATCH',
+      body: JSON.stringify({ assignedToId }),
+    })
+    this.clearCache('/requests')
+    return result
+  }
+
+  async deleteRequest(requestId: string) {
+    const result = await this.request(`/requests/${requestId}`, {
+      method: 'DELETE',
+    })
+    this.clearCache('/requests')
+    return result
+  }
+
+  async getDepartments() {
+    return this.request('/team/departments')
+  }
+
+  async getDepartmentAdmins(departmentIdOrName: string) {
+    return this.request(`/requests/department-admins/${encodeURIComponent(departmentIdOrName)}`)
   }
 }
 

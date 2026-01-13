@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { User, LogOut, Bell, Check, Bot, Loader2, GripVertical, UserCircle, Mail, Building2, Briefcase, Calendar, Shield, Key, CreditCard } from 'lucide-react'
+import { User, LogOut, Bell, Check, Bot, Loader2, UserCircle, Mail, Building2, Briefcase, Calendar, Shield, Key, CreditCard } from 'lucide-react'
 import { signOut, getToken } from '@/lib/auth-client'
 import { apiClient } from '@/lib/api'
 import { format } from 'date-fns'
@@ -148,26 +148,6 @@ export function Navbar() {
   })
   const [allUsers, setAllUsers] = useState<{ id: string; name?: string; email: string }[]>([])
   const [showTaskForm, setShowTaskForm] = useState(false)
-  const [buttonPosition, setButtonPosition] = useState(() => {
-    // Initialize with default position if available
-    if (typeof window !== 'undefined') {
-      const savedPosition = localStorage.getItem('aiButtonPosition')
-      if (savedPosition) {
-        try {
-          return JSON.parse(savedPosition)
-        } catch (e) {
-          // Fall through to default
-        }
-      }
-      return { x: window.innerWidth - 80, y: window.innerHeight - 100 }
-    }
-    return { x: 0, y: 0 }
-  })
-  const [isDragging, setIsDragging] = useState(false)
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
-  const [mouseDownPos, setMouseDownPos] = useState({ x: 0, y: 0 }) // Track initial mouse position
-  const [hasMoved, setHasMoved] = useState(false) // Track if mouse actually moved
-  const buttonRef = useRef<HTMLButtonElement>(null)
   
   const loadCachedUserDetails = useCallback(() => readCachedUserDetails(), [])
 
@@ -392,32 +372,6 @@ export function Navbar() {
     fetchUnreadCount()
     fetchAllUsers()
     
-    // Load saved button position (update if window size changed)
-    const savedPosition = localStorage.getItem('aiButtonPosition')
-    if (savedPosition) {
-      try {
-        const pos = JSON.parse(savedPosition)
-        // Validate position is within bounds
-        if (pos.x >= 0 && pos.y >= 0 && pos.x <= window.innerWidth && pos.y <= window.innerHeight) {
-          setButtonPosition(pos)
-        } else {
-          // Reset to default if saved position is invalid
-          const defaultPos = { x: window.innerWidth - 80, y: window.innerHeight - 100 }
-          setButtonPosition(defaultPos)
-          localStorage.setItem('aiButtonPosition', JSON.stringify(defaultPos))
-        }
-      } catch (e) {
-        // Use default position (bottom right)
-        const defaultPos = { x: window.innerWidth - 80, y: window.innerHeight - 100 }
-        setButtonPosition(defaultPos)
-        localStorage.setItem('aiButtonPosition', JSON.stringify(defaultPos))
-      }
-    } else {
-      // Default position (bottom right)
-      const defaultPos = { x: window.innerWidth - 80, y: window.innerHeight - 100 }
-      setButtonPosition(defaultPos)
-      localStorage.setItem('aiButtonPosition', JSON.stringify(defaultPos))
-    }
     
     // Poll for new notifications every 5 seconds for real-time updates
     const interval = setInterval(() => {
@@ -475,25 +429,6 @@ export function Navbar() {
     }
   }, [loadCachedUserDetails, applyUserDetails, fetchUserDetails, fetchNotifications, fetchUnreadCount, fetchAllUsers])
 
-  // Handle window resize to keep button in bounds
-  useEffect(() => {
-    const handleResize = () => {
-      if (typeof window !== 'undefined' && buttonPosition.x > 0 && buttonPosition.y > 0) {
-        const maxX = window.innerWidth - 56 // Button width
-        const maxY = window.innerHeight - 56 // Button height
-        setButtonPosition((prev: { x: number; y: number }) => ({
-          x: Math.max(0, Math.min(maxX, prev.x)),
-          y: Math.max(0, Math.min(maxY, prev.y)),
-        }))
-      } else if (typeof window !== 'undefined') {
-        // Initialize position if not set
-        setButtonPosition({ x: window.innerWidth - 80, y: window.innerHeight - 100 })
-      }
-    }
-
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [buttonPosition])
 
   const handleMarkAsRead = async (id: string) => {
     try {
@@ -959,160 +894,6 @@ export function Navbar() {
     return colors[priority] || colors.MEDIUM
   }
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLButtonElement>) => {
-    if (e.button !== 0) return // Only handle left mouse button
-    
-    const target = e.target as HTMLElement
-    
-    // Store initial mouse position for movement detection
-    setMouseDownPos({ x: e.clientX, y: e.clientY })
-    setHasMoved(false) // Reset movement flag
-    
-    // Always allow dragging from grip icon
-    if (target.closest('.drag-handle')) {
-      setIsDragging(true)
-      setDragStart({
-        x: e.clientX - buttonPosition.x,
-        y: e.clientY - buttonPosition.y,
-      })
-      e.preventDefault()
-      e.stopPropagation()
-      return
-    }
-    
-    // Allow dragging by holding Shift key anywhere on button
-    if (e.shiftKey) {
-      setIsDragging(true)
-      setDragStart({
-        x: e.clientX - buttonPosition.x,
-        y: e.clientY - buttonPosition.y,
-      })
-      e.preventDefault()
-      e.stopPropagation()
-      return
-    }
-    
-    // If clicking on Bot icon, don't start dragging - let click handler open dialog
-    if (target.closest('svg') || target.closest('.bot-icon')) {
-      // Don't start dragging, let onClick handle it
-      return
-    }
-    
-    // Allow dragging by clicking and holding on the button (not on Bot icon)
-    setIsDragging(true)
-    setDragStart({
-      x: e.clientX - buttonPosition.x,
-      y: e.clientY - buttonPosition.y,
-    })
-    // Don't prevent default here - let click event fire if no movement
-  }
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return
-
-      // Check if mouse actually moved (more than 5 pixels from initial position)
-      const deltaX = Math.abs(e.clientX - mouseDownPos.x)
-      const deltaY = Math.abs(e.clientY - mouseDownPos.y)
-      
-      if (deltaX > 5 || deltaY > 5) {
-        setHasMoved(true) // Mark that we've actually moved
-      }
-
-      const newX = e.clientX - dragStart.x
-      const newY = e.clientY - dragStart.y
-
-      // Constrain to viewport bounds
-      const maxX = window.innerWidth - 56
-      const maxY = window.innerHeight - 56
-      const minX = 0
-      const minY = 0
-
-      const constrainedX = Math.max(minX, Math.min(maxX, newX))
-      const constrainedY = Math.max(minY, Math.min(maxY, newY))
-
-      const newPosition = { x: constrainedX, y: constrainedY }
-      setButtonPosition(newPosition)
-      
-      // Save position to localStorage on every move for better persistence
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('aiButtonPosition', JSON.stringify(newPosition))
-      }
-    }
-
-    const handleTouchMove = (e: TouchEvent) => {
-      if (!isDragging) return
-      e.preventDefault()
-      
-      const touch = e.touches[0]
-      
-      // Check if touch actually moved (more than 5 pixels from initial position)
-      const deltaX = Math.abs(touch.clientX - mouseDownPos.x)
-      const deltaY = Math.abs(touch.clientY - mouseDownPos.y)
-      
-      if (deltaX > 5 || deltaY > 5) {
-        setHasMoved(true) // Mark that we've actually moved
-      }
-      
-      const newX = touch.clientX - dragStart.x
-      const newY = touch.clientY - dragStart.y
-
-      // Constrain to viewport bounds
-      const maxX = window.innerWidth - 56
-      const maxY = window.innerHeight - 56
-      const minX = 0
-      const minY = 0
-
-      const constrainedX = Math.max(minX, Math.min(maxX, newX))
-      const constrainedY = Math.max(minY, Math.min(maxY, newY))
-
-      const newPosition = { x: constrainedX, y: constrainedY }
-      setButtonPosition(newPosition)
-      
-      // Save position to localStorage
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('aiButtonPosition', JSON.stringify(newPosition))
-      }
-    }
-
-    const handleMouseUp = () => {
-      if (isDragging) {
-        setIsDragging(false)
-        // Reset movement flag after a short delay to allow onClick to check it
-        setTimeout(() => {
-          setHasMoved(false)
-        }, 100)
-      }
-    }
-
-    const handleTouchEnd = () => {
-      if (isDragging) {
-        setIsDragging(false)
-        // Reset movement flag after a short delay
-        setTimeout(() => {
-          setHasMoved(false)
-        }, 100)
-      }
-    }
-
-    if (isDragging) {
-      document.addEventListener('mousemove', handleMouseMove, { passive: false })
-      document.addEventListener('mouseup', handleMouseUp)
-      document.addEventListener('touchmove', handleTouchMove, { passive: false })
-      document.addEventListener('touchend', handleTouchEnd)
-      document.body.style.userSelect = 'none' // Prevent text selection while dragging
-      document.body.style.cursor = 'grabbing' // Show grabbing cursor
-    }
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      document.removeEventListener('touchmove', handleTouchMove)
-      document.removeEventListener('touchend', handleTouchEnd)
-      document.body.style.userSelect = ''
-      document.body.style.cursor = ''
-    }
-  }, [isDragging, dragStart, buttonPosition, mouseDownPos])
 
   return (
     <nav className="sticky top-0 z-30 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -1568,55 +1349,6 @@ export function Navbar() {
           )}
         </div>
       </div>
-
-      {/* AI Assistant Floating Button */}
-      {user && typeof window !== 'undefined' && (
-        <Button
-          ref={buttonRef}
-          className={`fixed h-14 w-14 rounded-full shadow-2xl z-[9999] bg-primary hover:bg-primary/90 text-primary-foreground transition-all duration-200 select-none ${
-            isDragging ? 'cursor-grabbing scale-110 shadow-3xl' : 'cursor-move'
-          }`}
-          style={{
-            left: `${buttonPosition.x > 0 ? buttonPosition.x : (window.innerWidth - 80)}px`,
-            top: `${buttonPosition.y > 0 ? buttonPosition.y : (window.innerHeight - 100)}px`,
-            transform: isDragging ? 'scale(1.1)' : undefined,
-            touchAction: 'none', // Prevent touch scrolling on mobile
-          }}
-          onMouseDown={handleMouseDown}
-          onTouchStart={(e) => {
-            // Support touch dragging on mobile
-            const touch = e.touches[0]
-            setIsDragging(true)
-            setDragStart({
-              x: touch.clientX - buttonPosition.x,
-              y: touch.clientY - buttonPosition.y,
-            })
-            e.preventDefault()
-          }}
-          onClick={(e) => {
-            // Only open dialog if not dragging or if we didn't actually move the mouse
-            if (!hasMoved) {
-              setIsAIDialogOpen(true)
-              setAiQuery('')
-              setAiResponse(null)
-              setShowTaskForm(false)
-              setTaskFormData({
-                title: '',
-                status: 'IN_PROGRESS',
-                priority: 'MEDIUM',
-                assignee: '',
-                dueDate: '',
-              })
-            }
-          }}
-          title="AI Assistant - Drag to move, Click Bot icon to open"
-        >
-          <div className="relative w-full h-full flex items-center justify-center">
-            <Bot className="h-6 w-6 bot-icon pointer-events-none" />
-            <GripVertical className="absolute top-1 right-1 h-3 w-3 opacity-70 drag-handle pointer-events-none" />
-          </div>
-        </Button>
-      )}
 
       {/* AI Assistant Dialog */}
       <Dialog open={isAIDialogOpen} onOpenChange={setIsAIDialogOpen}>

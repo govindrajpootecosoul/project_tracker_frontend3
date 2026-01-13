@@ -12,6 +12,7 @@ import {
   Key,
   CreditCard,
   Settings,
+  Inbox,
 } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
@@ -29,13 +30,14 @@ import {
 import { Label } from '@/components/ui/label'
 
 const menuItems = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, requirePermission: null, requireSuperAdmin: false },
-  { name: 'My Tasks', href: '/tasks', icon: CheckSquare, requirePermission: null, requireSuperAdmin: false },
-  { name: 'Projects', href: '/projects', icon: FolderKanban, requirePermission: null, requireSuperAdmin: false },
-  { name: 'Team Management', href: '/team', icon: Users, requirePermission: null, requireSuperAdmin: false },
-  { name: 'Credential Manager', href: '/credentials', icon: Key, requirePermission: 'hasCredentialAccess', requireSuperAdmin: false },
-  { name: 'My Subscriptions', href: '/subscriptions', icon: CreditCard, requirePermission: 'hasSubscriptionAccess', requireSuperAdmin: false },
-  { name: 'Manage Auto Send Mail', href: '/admin/auto-email', icon: Settings, requirePermission: null, requireSuperAdmin: true },
+  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, requirePermission: null, requireSuperAdmin: false, requireAdmin: false },
+  { name: 'My Tasks', href: '/tasks', icon: CheckSquare, requirePermission: null, requireSuperAdmin: false, requireAdmin: false },
+  { name: 'Projects', href: '/projects', icon: FolderKanban, requirePermission: null, requireSuperAdmin: false, requireAdmin: false },
+  { name: 'Team Management', href: '/team', icon: Users, requirePermission: null, requireSuperAdmin: false, requireAdmin: false },
+  { name: 'RequestHub', href: '/requesthub', icon: Inbox, requirePermission: null, requireSuperAdmin: false, requireAdmin: true },
+  { name: 'Credential Manager', href: '/credentials', icon: Key, requirePermission: 'hasCredentialAccess', requireSuperAdmin: false, requireAdmin: false },
+  { name: 'My Subscriptions', href: '/subscriptions', icon: CreditCard, requirePermission: 'hasSubscriptionAccess', requireSuperAdmin: false, requireAdmin: false },
+  { name: 'Manage Auto Send Mail', href: '/admin/auto-email', icon: Settings, requirePermission: null, requireSuperAdmin: true, requireAdmin: false },
 ]
 
 export function Sidebar() {
@@ -167,6 +169,11 @@ export function Sidebar() {
     return roleUpper === 'SUPER_ADMIN'
   }, [userPermissions.role])
 
+  const isAdmin = useMemo(() => {
+    const roleUpper = userPermissions.role?.toUpperCase() || ''
+    return roleUpper === 'ADMIN' || roleUpper === 'SUPER_ADMIN'
+  }, [userPermissions.role])
+
   const handleAddThought = async () => {
     if (!newThought.trim()) {
       return
@@ -279,6 +286,11 @@ export function Sidebar() {
   const visibleMenuItems = menuItems.filter(item => {
     // Check super admin requirement
     if (item.requireSuperAdmin && !isSuperAdmin) {
+      return false
+    }
+    
+    // Check admin requirement (ADMIN or SUPER_ADMIN)
+    if (item.requireAdmin && !isAdmin) {
       return false
     }
     
