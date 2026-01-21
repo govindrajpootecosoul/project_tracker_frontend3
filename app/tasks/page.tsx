@@ -165,6 +165,7 @@ export default function TasksPage() {
   const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null)
   const [user, setUser] = useState<{ id?: string; department?: string; role?: string; name?: string; email?: string } | null>(null)
   const [activeTab, setActiveTab] = useState<string>('my')
+  const [allProjectTasks, setAllProjectTasks] = useState<Task[]>([]) // Combined tasks from all tabs when project filter is active
   const [myTasksSort, setMyTasksSort] = useState<'default' | 'alphabetical'>('default')
   const [assignableMembers, setAssignableMembers] = useState<{ id: string; name?: string; email: string; department?: string }[]>([])
   const [assigneeSearchQuery, setAssigneeSearchQuery] = useState('')
@@ -179,11 +180,73 @@ export default function TasksPage() {
   const [duplicatingTaskId, setDuplicatingTaskId] = useState<string | null>(null)
   const projectFilter = searchParams.get('projectId')
   const projectFilterName = searchParams.get('projectName')
+  const projectDepartment = searchParams.get('projectDepartment')
   const [departmentFilter, setDepartmentFilter] = useState<string>('all')
   const [departments, setDepartments] = useState<string[]>([])
+  const [taskProjectDepartmentFilter, setTaskProjectDepartmentFilter] = useState<string>('all')
+  const [pinSelectedProject, setPinSelectedProject] = useState(false)
+  const [pinnedProjectIds, setPinnedProjectIds] = useState<Set<string>>(new Set())
+  const [isPinManagerOpen, setIsPinManagerOpen] = useState(false)
   const [otherDepartmentTasks, setOtherDepartmentTasks] = useState<Task[]>([])
   const [isLoadingOtherDept, setIsLoadingOtherDept] = useState(false)
   const [taskFields, setTaskFields] = useState<Array<{ title: string; description: string; imageCount: string; videoCount: string }>>([{ title: '', description: '', imageCount: '', videoCount: '' }])
+
+  const getPinnedProjectsStorageKey = useCallback(
+    (userId?: string | null) =>
+      userId ? `eco_project_tracker:pinnedProjectIds:${userId}` : 'eco_project_tracker:pinnedProjectIds',
+    [],
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    if (!user?.id) {
+      setPinnedProjectIds(new Set())
+      return
+    }
+
+    try {
+      const storageKey = getPinnedProjectsStorageKey(user.id)
+      const raw = window.localStorage.getItem(storageKey)
+      if (!raw) {
+        setPinnedProjectIds(new Set())
+        return
+      }
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        setPinnedProjectIds(new Set(parsed.filter((id) => typeof id === 'string' && id.trim().length > 0)))
+      } else {
+        setPinnedProjectIds(new Set())
+      }
+    } catch {
+      setPinnedProjectIds(new Set())
+    }
+  }, [user?.id, getPinnedProjectsStorageKey])
+
+  const persistPinnedProjects = useCallback(
+    (next: Set<string>) => {
+      if (typeof window === 'undefined' || !user?.id) return
+      try {
+        const storageKey = getPinnedProjectsStorageKey(user.id)
+        window.localStorage.setItem(storageKey, JSON.stringify(Array.from(next)))
+      } catch {
+        // ignore
+      }
+    },
+    [user?.id, getPinnedProjectsStorageKey],
+  )
+
+  const togglePinnedProjectId = useCallback((projectId: string) => {
+    const id = projectId.trim()
+    if (!id) return
+    setPinnedProjectIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      persistPinnedProjects(next)
+      return next
+    })
+  }, [persistPinnedProjects])
   
   // Pagination state for My Tasks
   const [myTasksPage, setMyTasksPage] = useState(1)
@@ -211,6 +274,7 @@ export default function TasksPage() {
   const [otherDeptTasksItemsPerPage, setOtherDeptTasksItemsPerPage] = useState(20)
   const [otherDeptTasksTotal, setOtherDeptTasksTotal] = useState(0)
   const [isInitialLoadingOtherDept, setIsInitialLoadingOtherDept] = useState(true)
+  const [otherDeptMemberFilter, setOtherDeptMemberFilter] = useState<string>('all')
   
   // Refs for infinite scroll
   const myTasksScrollRef = useRef<HTMLDivElement>(null)
@@ -240,7 +304,8 @@ export default function TasksPage() {
   )
 
   const isSuperAdminUser = user?.role?.toUpperCase() === 'SUPER_ADMIN'
-  const showOtherDeptTab = isSuperAdminUser && (isLoadingOtherDept || otherDepartmentTasks.length > 0)
+  // Always show Other Department tab for super admin, even if no tasks currently fetched.
+  const showOtherDeptTab = isSuperAdminUser
 
   const teamMemberLookup = useMemo(() => {
     const map = new Map<string, TeamMemberInfo>()
@@ -257,17 +322,44 @@ export default function TasksPage() {
     return project?.department || null
   }, [formData.projectId, projects])
 
+  const filteredProjectsForTaskForm = useMemo(() => {
+    const projectsArray = Array.isArray(projects) ? projects : []
+    if (taskProjectDepartmentFilter === 'all') return projectsArray
+    const normalized = taskProjectDepartmentFilter.trim().toLowerCase()
+    return projectsArray.filter((p) => p.department?.trim().toLowerCase() === normalized)
+  }, [projects, taskProjectDepartmentFilter])
+
+  const sortedProjectsForTaskForm = useMemo(() => {
+    const list = [...filteredProjectsForTaskForm]
+    list.sort((a, b) => {
+      const aPinned = pinnedProjectIds.has(a.id)
+      const bPinned = pinnedProjectIds.has(b.id)
+      if (aPinned !== bPinned) return aPinned ? -1 : 1
+      return (a.name || '').localeCompare(b.name || '')
+    })
+    return list
+  }, [filteredProjectsForTaskForm, pinnedProjectIds])
+
+  useEffect(() => {
+    if (!formData.projectId) return
+    const stillValid = filteredProjectsForTaskForm.some((p) => p.id === formData.projectId)
+    if (!stillValid) {
+      updateFormField('projectId', '')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskProjectDepartmentFilter, filteredProjectsForTaskForm])
+
   const isEditingNewProductDesignTask = editingTask ? isNewProductDesignDepartment(editingTask.project?.department) : false
   const userIsNewProductDesign = isNewProductDesignDepartment(user?.department)
   const shouldShowMediaFields = userIsNewProductDesign || isNewProductDesignDepartment(selectedProjectDepartment) || isEditingNewProductDesignTask
 
   const availableTeamMembers = useMemo(() => {
     const normalizedDepartmentFilter = user?.department?.trim().toLowerCase() || null
-    const isSuperAdmin = user?.role?.toUpperCase() === 'SUPER_ADMIN'
 
     return teamMembers
       .filter(member => {
-        if (isSuperAdmin || !normalizedDepartmentFilter) return true
+        // Team Tasks should always show members from the current user's department (for USER/ADMIN/SUPER_ADMIN).
+        if (!normalizedDepartmentFilter) return true
         return member.department?.trim().toLowerCase() === normalizedDepartmentFilter
       })
       .sort((a, b) => {
@@ -275,11 +367,23 @@ export default function TasksPage() {
         const labelB = (b.name || b.email).toLowerCase()
         return labelA.localeCompare(labelB)
       })
-  }, [teamMembers, user?.department, user?.role])
+  }, [teamMembers, user?.department])
+
+  const availableOtherDeptMembers = useMemo(() => {
+    // Only show members list once a department is selected in Other Department tab.
+    if (departmentFilter === 'all') return []
+    const normalizedSelected = departmentFilter.trim().toLowerCase()
+    return teamMembers
+      .filter((member) => member.department?.trim().toLowerCase() === normalizedSelected)
+      .sort((a, b) => {
+        const labelA = (a.name || a.email).toLowerCase()
+        const labelB = (b.name || b.email).toLowerCase()
+        return labelA.localeCompare(labelB)
+      })
+  }, [teamMembers, departmentFilter])
 
   const filteredTeamTasks = useMemo(() => {
     const normalizedDepartmentFilter = user?.department?.trim().toLowerCase() || null
-    const isSuperAdmin = user?.role?.toUpperCase() === 'SUPER_ADMIN'
     const taskMap = new Map<string, Task>()
 
     teamTasks.forEach(task => {
@@ -292,14 +396,16 @@ export default function TasksPage() {
           : task.assignees.some(assignee => assignee.user.id === teamMemberFilter)
       if (!matchesMember) return
 
-      const matchesDepartment =
-        isSuperAdmin || !normalizedDepartmentFilter
-          ? true
-          : task.assignees.some((assignee) => {
-              const memberMeta = teamMemberLookup.get(assignee.user.id)
-              const memberDepartment = memberMeta?.department?.trim().toLowerCase()
-              return memberDepartment === normalizedDepartmentFilter
-            })
+      // Team Tasks should show tasks assigned to members from the current user's department (all roles).
+      // Backend already scopes to department, but keep this as a safety net when we have member metadata.
+      let matchesDepartment = true
+      if (normalizedDepartmentFilter) {
+        matchesDepartment = task.assignees.some((assignee) => {
+          const memberMeta = teamMemberLookup.get(assignee.user.id)
+          const memberDepartment = memberMeta?.department?.trim().toLowerCase()
+          return memberDepartment === normalizedDepartmentFilter
+        })
+      }
 
       if (!matchesDepartment) return
 
@@ -320,8 +426,9 @@ export default function TasksPage() {
       taskMap.set(task.id, task)
     })
 
-    return Array.from(taskMap.values()).filter(matchesProjectFilter).filter(matchesDepartmentFilter)
-  }, [teamTasks, teamTaskStatusFilter, teamMemberFilter, teamMemberLookup, user?.department, user?.role, taskSearchQuery, matchesProjectFilter, matchesDepartmentFilter])
+    // Don't apply departmentFilter in Team Tasks tab - only filter by project if needed
+    return Array.from(taskMap.values()).filter(matchesProjectFilter)
+  }, [teamTasks, teamTaskStatusFilter, teamMemberFilter, teamMemberLookup, user?.department, taskSearchQuery, matchesProjectFilter])
 
   useEffect(() => {
     if (teamMemberFilter === 'all') return
@@ -337,18 +444,30 @@ export default function TasksPage() {
     }
   }, [activeTab, showOtherDeptTab])
 
-  const fetchTasks = useCallback(async () => {
+  const fetchTasks = useCallback(async (overridePage?: number, overrideItemsPerPage?: number) => {
     try {
       setIsInitialLoadingMyTasks(true)
       setIsLoadingMyTasks(true)
-      const skip = (myTasksPage - 1) * myTasksItemsPerPage
-      const result = await apiClient.getMyTasks({ limit: myTasksItemsPerPage, skip })
+      const page = overridePage !== undefined ? overridePage : myTasksPage
+      // When project filter is active, fetch all tasks to ensure we get all tasks for that project
+      const itemsPerPage = projectFilter ? 10000 : (overrideItemsPerPage !== undefined ? overrideItemsPerPage : myTasksItemsPerPage)
+      const skip = projectFilter ? 0 : (page - 1) * itemsPerPage
+      const result = await apiClient.getMyTasks({ limit: itemsPerPage, skip })
       const data = result.tasks || result // Handle both new and old format
       const tasksArray = Array.isArray(data) ? data : []
-      setTasks(tasksArray)
+      
+      // Filter by project if projectFilter is active
+      const filteredTasks = projectFilter 
+        ? tasksArray.filter(task => task.projectId === projectFilter || task.project?.id === projectFilter)
+        : tasksArray
+      
+      setTasks(filteredTasks)
       
       // Update total count from API response
-      if (result.total !== undefined) {
+      if (projectFilter) {
+        // When filtering by project, use the filtered count
+        setMyTasksTotal(filteredTasks.length)
+      } else if (result.total !== undefined) {
         setMyTasksTotal(result.total)
       } else {
         // Fallback: estimate based on current page
@@ -360,20 +479,36 @@ export default function TasksPage() {
       setIsLoadingMyTasks(false)
       setIsInitialLoadingMyTasks(false)
     }
-  }, [myTasksPage, myTasksItemsPerPage])
+  }, [myTasksPage, myTasksItemsPerPage, projectFilter])
 
-  const fetchTeamTasks = useCallback(async () => {
+  const fetchTeamTasks = useCallback(async (overridePage?: number, overrideItemsPerPage?: number) => {
     try {
       setIsInitialLoadingTeamTasks(true)
       setIsLoadingTeamTasks(true)
-      const skip = (teamTasksPage - 1) * teamTasksItemsPerPage
-      const result = await apiClient.getTeamTasks({ limit: teamTasksItemsPerPage, skip })
+      const page = overridePage !== undefined ? overridePage : teamTasksPage
+      // When project filter is active, fetch all tasks to ensure we get all tasks for that project
+      const itemsPerPage = projectFilter ? 10000 : (overrideItemsPerPage !== undefined ? overrideItemsPerPage : teamTasksItemsPerPage)
+      const skip = projectFilter ? 0 : (page - 1) * itemsPerPage
+      // Team Tasks = all tasks assigned to members of the current user's department
+      // If a member filter is selected, ask server for that member's tasks so total count is correct.
+      const memberId = teamMemberFilter !== 'all' ? teamMemberFilter : undefined
+      const status = teamTaskStatusFilter !== 'all' ? teamTaskStatusFilter : undefined
+      const result = await apiClient.getDepartmentTasks({ limit: itemsPerPage, skip, memberId, status })
       const data = result.tasks || result // Handle both new and old format
       const tasksArray = Array.isArray(data) ? data : []
-      setTeamTasks(tasksArray)
+      
+      // Filter by project if projectFilter is active
+      const filteredTasks = projectFilter 
+        ? tasksArray.filter(task => task.projectId === projectFilter || task.project?.id === projectFilter)
+        : tasksArray
+      
+      setTeamTasks(filteredTasks)
       
       // Update total count from API response
-      if (result.total !== undefined) {
+      if (projectFilter) {
+        // When filtering by project, use the filtered count
+        setTeamTasksTotal(filteredTasks.length)
+      } else if (result.total !== undefined) {
         setTeamTasksTotal(result.total)
       } else {
         setTeamTasksTotal(tasksArray.length)
@@ -384,20 +519,45 @@ export default function TasksPage() {
       setIsLoadingTeamTasks(false)
       setIsInitialLoadingTeamTasks(false)
     }
-  }, [teamTasksPage, teamTasksItemsPerPage])
+  }, [teamTasksPage, teamTasksItemsPerPage, projectFilter, teamMemberFilter, teamTaskStatusFilter])
 
-  const fetchReviewTasks = useCallback(async () => {
+  // Avoid page reset loops: use a ref for fetchTeamTasks in filter-change effects.
+  const fetchTeamTasksRef = useRef(fetchTeamTasks)
+  useEffect(() => {
+    fetchTeamTasksRef.current = fetchTeamTasks
+  }, [fetchTeamTasks])
+
+  // When changing member/status filter on Team Tasks, reset to page 1 and refetch so totals match.
+  useEffect(() => {
+    if (activeTab !== 'team') return
+    setTeamTasksPage(1)
+    fetchTeamTasksRef.current(1, undefined)
+  }, [teamMemberFilter, teamTaskStatusFilter, activeTab])
+
+  const fetchReviewTasks = useCallback(async (overridePage?: number, overrideItemsPerPage?: number) => {
     try {
       setIsInitialLoadingReviewTasks(true)
       setIsLoadingReviewTasks(true)
-      const skip = (reviewTasksPage - 1) * reviewTasksItemsPerPage
-      const result = await apiClient.getReviewTasks({ limit: reviewTasksItemsPerPage, skip })
+      const page = overridePage !== undefined ? overridePage : reviewTasksPage
+      // When project filter is active, fetch all tasks to ensure we get all tasks for that project
+      const itemsPerPage = projectFilter ? 10000 : (overrideItemsPerPage !== undefined ? overrideItemsPerPage : reviewTasksItemsPerPage)
+      const skip = projectFilter ? 0 : (page - 1) * itemsPerPage
+      const result = await apiClient.getReviewTasks({ limit: itemsPerPage, skip })
       const data = result.tasks || result // Handle both new and old format
       const tasksArray = Array.isArray(data) ? data : []
-      setReviewTasks(tasksArray)
+      
+      // Filter by project if projectFilter is active
+      const filteredTasks = projectFilter 
+        ? tasksArray.filter(task => task.projectId === projectFilter || task.project?.id === projectFilter)
+        : tasksArray
+      
+      setReviewTasks(filteredTasks)
       
       // Update total count from API response
-      if (result.total !== undefined) {
+      if (projectFilter) {
+        // When filtering by project, use the filtered count
+        setReviewTasksTotal(filteredTasks.length)
+      } else if (result.total !== undefined) {
         setReviewTasksTotal(result.total)
       } else {
         setReviewTasksTotal(tasksArray.length)
@@ -408,9 +568,9 @@ export default function TasksPage() {
       setIsLoadingReviewTasks(false)
       setIsInitialLoadingReviewTasks(false)
     }
-  }, [reviewTasksPage, reviewTasksItemsPerPage])
+  }, [reviewTasksPage, reviewTasksItemsPerPage, projectFilter])
 
-  const fetchOtherDepartmentTasks = useCallback(async () => {
+  const fetchOtherDepartmentTasks = useCallback(async (overridePage?: number, overrideItemsPerPage?: number) => {
     if (!isSuperAdminUser) {
       setOtherDepartmentTasks([])
       setIsInitialLoadingOtherDept(false)
@@ -419,21 +579,29 @@ export default function TasksPage() {
     setIsInitialLoadingOtherDept(true)
     setIsLoadingOtherDept(true)
     try {
-      const skip = (otherDeptTasksPage - 1) * otherDeptTasksItemsPerPage
-      const result = await apiClient.getAllDepartmentsTasks({ limit: otherDeptTasksItemsPerPage, skip })
+      const page = overridePage !== undefined ? overridePage : otherDeptTasksPage
+      // When project filter is active, fetch all tasks to ensure we get all tasks for that project
+      const itemsPerPage = projectFilter ? 10000 : (overrideItemsPerPage !== undefined ? overrideItemsPerPage : otherDeptTasksItemsPerPage)
+      const skip = projectFilter ? 0 : (page - 1) * itemsPerPage
+      const selectedDept = departmentFilter !== 'all' ? departmentFilter : undefined
+      const memberId = otherDeptMemberFilter !== 'all' ? otherDeptMemberFilter : undefined
+      const result = await apiClient.getAllDepartmentsTasks({ limit: itemsPerPage, skip, department: selectedDept, memberId })
       const data = result.tasks || result // Handle both new and old format
       const tasksArray = Array.isArray(data) ? data : []
-      const userDept = user?.department?.trim().toLowerCase()
-      const filtered = tasksArray.filter((task) => {
-        const projectDept = task.project?.department?.trim().toLowerCase()
-        if (!projectDept) return false
-        if (!userDept) return true
-        return projectDept !== userDept
-      })
+      let filtered = tasksArray
+      
+      // Filter by project if projectFilter is active
+      if (projectFilter) {
+        filtered = filtered.filter(task => task.projectId === projectFilter || task.project?.id === projectFilter)
+      }
+      
       setOtherDepartmentTasks(filtered)
       
       // Update total count from API response
-      if (result.total !== undefined) {
+      if (projectFilter) {
+        // When filtering by project, use the filtered count
+        setOtherDeptTasksTotal(filtered.length)
+      } else if (result.total !== undefined) {
         setOtherDeptTasksTotal(result.total)
       } else {
         setOtherDeptTasksTotal(filtered.length)
@@ -445,11 +613,35 @@ export default function TasksPage() {
       setIsLoadingOtherDept(false)
       setIsInitialLoadingOtherDept(false)
     }
-  }, [isSuperAdminUser, user?.department, otherDeptTasksPage, otherDeptTasksItemsPerPage])
+  }, [isSuperAdminUser, otherDeptTasksPage, otherDeptTasksItemsPerPage, projectFilter, departmentFilter, otherDeptMemberFilter])
 
   useEffect(() => {
     fetchOtherDepartmentTasks()
   }, [fetchOtherDepartmentTasks])
+
+  // Keep a stable ref to the latest fetch function so filter-change effects don't re-run
+  // just because the callback identity changes (e.g. when paging).
+  const fetchOtherDepartmentTasksRef = useRef(fetchOtherDepartmentTasks)
+  useEffect(() => {
+    fetchOtherDepartmentTasksRef.current = fetchOtherDepartmentTasks
+  }, [fetchOtherDepartmentTasks])
+
+  // When changing department filter on Other Department tab, reset pagination and refetch so totals match.
+  useEffect(() => {
+    if (!isSuperAdminUser) return
+    if (activeTab !== 'otherDept') return
+    setOtherDeptTasksPage(1)
+    setOtherDeptMemberFilter('all')
+    fetchOtherDepartmentTasksRef.current(1, undefined)
+  }, [departmentFilter, activeTab, isSuperAdminUser])
+
+  // When changing member filter on Other Department tab, reset pagination and refetch.
+  useEffect(() => {
+    if (!isSuperAdminUser) return
+    if (activeTab !== 'otherDept') return
+    setOtherDeptTasksPage(1)
+    fetchOtherDepartmentTasksRef.current(1, undefined)
+  }, [otherDeptMemberFilter, activeTab, isSuperAdminUser])
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -592,9 +784,97 @@ export default function TasksPage() {
       if (tab === 'review') {
         setActiveTab('review')
       }
+      // Tab selection based on project will be handled by the separate useEffect
+      // that depends on projectFilter, projectDepartment, and user
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]) // Only run once on mount - fetch functions are called directly, not as dependencies
+
+  // Set appropriate tab when project is selected
+  useEffect(() => {
+    if (projectFilter && projectDepartment && user) {
+      const userDept = user.department?.trim().toLowerCase()
+      const projDept = projectDepartment.trim().toLowerCase()
+      const isSuperAdmin = user.role?.toUpperCase() === 'SUPER_ADMIN'
+      
+      if (isSuperAdmin && userDept && projDept !== userDept) {
+        // Super admin clicking on other department's project -> Other Department tab
+        setActiveTab('otherDept')
+      } else if (userDept && projDept === userDept) {
+        // Same department project -> Team Tasks tab
+        setActiveTab('team')
+      } else {
+        // Default -> My Tasks tab
+        setActiveTab('my')
+      }
+    }
+  }, [projectFilter, projectDepartment, user])
+
+  // Combine all tasks from all tabs when project filter is active
+  useEffect(() => {
+    if (projectFilter) {
+      const taskMap = new Map<string, Task>()
+      
+      // Add tasks from My Tasks
+      tasks.forEach(task => {
+        if (task.projectId === projectFilter || task.project?.id === projectFilter) {
+          taskMap.set(task.id, task)
+        }
+      })
+      
+      // Add tasks from Team Tasks
+      teamTasks.forEach(task => {
+        if (task.projectId === projectFilter || task.project?.id === projectFilter) {
+          taskMap.set(task.id, task)
+        }
+      })
+      
+      // Add tasks from Review Tasks
+      reviewTasks.forEach(task => {
+        if (task.projectId === projectFilter || task.project?.id === projectFilter) {
+          taskMap.set(task.id, task)
+        }
+      })
+      
+      // Add tasks from Other Department (if super admin)
+      if (isSuperAdminUser) {
+        otherDepartmentTasks.forEach(task => {
+          if (task.projectId === projectFilter || task.project?.id === projectFilter) {
+            taskMap.set(task.id, task)
+          }
+        })
+      }
+      
+      // Convert map to array and sort by createdAt (newest first)
+      const combinedTasks = Array.from(taskMap.values()).sort((a, b) => {
+        const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0
+        const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0
+        return bTime - aTime
+      })
+      
+      setAllProjectTasks(combinedTasks)
+    } else {
+      setAllProjectTasks([])
+    }
+  }, [projectFilter, tasks, teamTasks, reviewTasks, otherDepartmentTasks, isSuperAdminUser])
+
+  // Refetch tasks when project filter changes
+  useEffect(() => {
+    if (projectFilter) {
+      // Reset to page 1 when project filter is applied
+      setMyTasksPage(1)
+      setTeamTasksPage(1)
+      setReviewTasksPage(1)
+      setOtherDeptTasksPage(1)
+      // Fetch all tasks for the selected project from all tabs
+      fetchTasks(1, 10000)
+      fetchTeamTasks(1, 10000)
+      fetchReviewTasks(1, 10000)
+      if (isSuperAdminUser) {
+        fetchOtherDepartmentTasks(1, 10000)
+      }
+    }
+  }, [projectFilter, fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchOtherDepartmentTasks, isSuperAdminUser])
 
   // Separate useEffect for event listeners using refs to avoid refresh loops
   useEffect(() => {
@@ -704,6 +984,8 @@ export default function TasksPage() {
 
   const openCreateDialog = useCallback(() => {
     resetForm()
+    setPinSelectedProject(false)
+    setIsPinManagerOpen(false)
     setIsDialogOpen(true)
     // Fetch assignable members when opening dialog
     if (user?.role && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) {
@@ -834,6 +1116,17 @@ export default function TasksPage() {
       }
 
       const result = await apiClient.createTask(cleanData)
+
+      // Pin selected project for future quick selection (local-only)
+      if (pinSelectedProject && formData.projectId && formData.projectId.trim() !== '') {
+        const projectId = formData.projectId.trim()
+        setPinnedProjectIds((prev) => {
+          const next = new Set(prev)
+          next.add(projectId)
+          persistPinnedProjects(next)
+          return next
+        })
+      }
       
       // Handle response - could be single task or multiple tasks
       if (result.tasks && Array.isArray(result.tasks)) {
@@ -863,7 +1156,7 @@ export default function TasksPage() {
     } finally {
       setIsSavingTask(false)
     }
-  }, [taskFields, formData, closeDialog, fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchProjects, user?.role, isSavingTask, shouldShowMediaFields])
+  }, [taskFields, formData, closeDialog, fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchProjects, user?.role, isSavingTask, shouldShowMediaFields, pinSelectedProject, persistPinnedProjects])
 
   const handleUpdateTask = useCallback(async () => {
     if (!editingTask) return
@@ -1956,7 +2249,12 @@ export default function TasksPage() {
     </motion.div>
   )
 
-  const getFilteredAndSortedTasks = (tasksToRender: Task[], sortType: 'default' | 'alphabetical' = 'default', searchQuery: string = '') => {
+  const getFilteredAndSortedTasks = (
+    tasksToRender: Task[],
+    sortType: 'default' | 'alphabetical' = 'default',
+    searchQuery: string = '',
+    skipDepartmentFilter: boolean = false,
+  ) => {
     // Filter by search query first
     let filtered = tasksToRender
     if (searchQuery.trim()) {
@@ -1970,7 +2268,10 @@ export default function TasksPage() {
       )
     }
 
-    filtered = filtered.filter(matchesProjectFilter).filter(matchesDepartmentFilter)
+    filtered = filtered.filter(matchesProjectFilter)
+    if (!skipDepartmentFilter) {
+      filtered = filtered.filter(matchesDepartmentFilter)
+    }
 
     // Sort based on selected sort type
     const sorted = [...filtered].sort((a, b) => {
@@ -2049,10 +2350,24 @@ export default function TasksPage() {
     return results.filter(matchesProjectFilter).filter(matchesDepartmentFilter)
   }, [reviewTasks, user?.id, taskSearchQuery, matchesProjectFilter, matchesDepartmentFilter])
 
-  const renderTasks = (tasksToRender: Task[], sortType: 'default' | 'alphabetical' = 'default') => {
-    const filteredAndSorted = getFilteredAndSortedTasks(tasksToRender, sortType, taskSearchQuery)
+  const renderTasks = (
+    tasksToRender: Task[],
+    sortType: 'default' | 'alphabetical' = 'default',
+    currentPage?: number,
+    itemsPerPage?: number,
+    skipDepartmentFilter: boolean = false,
+  ) => {
+    const filteredAndSorted = getFilteredAndSortedTasks(tasksToRender, sortType, taskSearchQuery, skipDepartmentFilter)
+    
+    // Apply client-side pagination when project filter is active (since we fetch all tasks)
+    let paginatedTasks = filteredAndSorted
+    if (projectFilter && currentPage !== undefined && itemsPerPage !== undefined) {
+      const startIndex = (currentPage - 1) * itemsPerPage
+      const endIndex = startIndex + itemsPerPage
+      paginatedTasks = filteredAndSorted.slice(startIndex, endIndex)
+    }
 
-    if (filteredAndSorted.length === 0) {
+    if (paginatedTasks.length === 0 && filteredAndSorted.length === 0) {
       const emptyMessage = projectFilter
         ? `No tasks found for ${projectFilterName || 'the selected project'}.`
         : 'No tasks found. Create your first task!'
@@ -2071,7 +2386,7 @@ export default function TasksPage() {
         <div className="flex gap-4 overflow-x-auto pb-4">
           {statusColumns.map((status) => {
             // Filter tasks by exact status match (case-sensitive)
-            const statusTasks = filteredAndSorted.filter(t => {
+            const statusTasks = paginatedTasks.filter(t => {
               const matches = t.status === status
               if (!matches && t.status) {
                 console.log('Status mismatch:', { 
@@ -2101,7 +2416,7 @@ export default function TasksPage() {
       )
     }
 
-    const showAssetsColumn = userIsNewProductDesign || filteredAndSorted.some(task => isNewProductDesignDepartment(task.project?.department))
+    const showAssetsColumn = userIsNewProductDesign || paginatedTasks.some(task => isNewProductDesignDepartment(task.project?.department))
 
     if (viewMode === 'list') {
       return (
@@ -2121,7 +2436,7 @@ export default function TasksPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredAndSorted.map((task) => (
+                {paginatedTasks.map((task) => (
                   <tr key={task.id} className="border-b hover:bg-accent/50">
                     <td className="p-4">
                       <div>
@@ -2246,7 +2561,7 @@ export default function TasksPage() {
     // Grid view (default)
     return (
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
-        {filteredAndSorted.map((task) => (
+        {paginatedTasks.map((task) => (
           <TaskCard key={task.id} task={task} />
         ))}
       </div>
@@ -2299,25 +2614,11 @@ export default function TasksPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center gap-2">
-              <Label>Department</Label>
-              <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
-                <SelectTrigger className="w-48">
-                  <SelectValue placeholder="All Departments" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Departments</SelectItem>
-                  {departments.map((dept) => (
-                    <SelectItem key={dept} value={dept}>
-                      {dept}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
           </div>
           <div className="text-sm text-muted-foreground">
-            Showing {filteredTeamTasks.length} task{filteredTeamTasks.length !== 1 ? 's' : ''}
+            {projectFilter
+              ? `Showing ${allProjectTasks.length} task${allProjectTasks.length !== 1 ? 's' : ''}`
+              : `Showing ${filteredTeamTasks.length} of ${teamTasksTotal} task${teamTasksTotal !== 1 ? 's' : ''}`}
           </div>
         </div>
         <AnimatePresence mode="wait">
@@ -2360,23 +2661,27 @@ export default function TasksPage() {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
             >
-              {renderTasks(filteredTeamTasks)}
-              {!isInitialLoadingTeamTasks && filteredTeamTasks.length > 0 && (
+                    {renderTasks(projectFilter ? allProjectTasks : filteredTeamTasks, 'default', projectFilter ? teamTasksPage : undefined, projectFilter ? teamTasksItemsPerPage : undefined, true)}
+              {!isInitialLoadingTeamTasks && (projectFilter ? allProjectTasks.length > 0 : filteredTeamTasks.length > 0) && (
                 <PaginationControls
                   currentPage={teamTasksPage}
-                  totalPages={Math.ceil(teamTasksTotal / teamTasksItemsPerPage) || 1}
+                  totalPages={Math.ceil((projectFilter ? allProjectTasks.length : teamTasksTotal) / teamTasksItemsPerPage) || 1}
                   itemsPerPage={teamTasksItemsPerPage}
-                  totalItems={teamTasksTotal}
+                  totalItems={projectFilter ? allProjectTasks.length : teamTasksTotal}
                   onPageChange={async (page) => {
                     setTeamTasksPage(page)
-                    // Manually fetch only when page changes
-                    await fetchTeamTasks()
+                    // When project filter is active, pagination is client-side only
+                    if (!projectFilter) {
+                      await fetchTeamTasks(page, undefined)
+                    }
                   }}
                   onItemsPerPageChange={async (items) => {
                     setTeamTasksItemsPerPage(items)
                     setTeamTasksPage(1)
-                    // Manually fetch only when items per page changes
-                    await fetchTeamTasks()
+                    // When project filter is active, pagination is client-side only
+                    if (!projectFilter) {
+                      await fetchTeamTasks(1, items)
+                    }
                   }}
                 />
               )}
@@ -2754,6 +3059,32 @@ export default function TasksPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
+                  <Label htmlFor="task-project-department">Department (for Project)</Label>
+                  <Select
+                    value={taskProjectDepartmentFilter}
+                    onValueChange={(value) => setTaskProjectDepartmentFilter(value)}
+                  >
+                    <SelectTrigger id="task-project-department">
+                      <SelectValue placeholder="All Departments" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Departments</SelectItem>
+                      {departments.map((dept) => (
+                        <SelectItem key={dept} value={dept}>
+                          {dept}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Filter projects by department
+                  </p>
+                </div>
+                <div />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <div className="flex items-center justify-between mb-2">
                     <Label htmlFor="project">Project (Optional)</Label>
                     <button
@@ -2778,6 +3109,11 @@ export default function TasksPage() {
                     onValueChange={(value) => {
                       const projectId = value === 'none' ? '' : value
                       updateFormField('projectId', projectId)
+                      if (!projectId) {
+                        setPinSelectedProject(false)
+                      } else {
+                        setPinSelectedProject(pinnedProjectIds.has(projectId))
+                      }
                     }}
                   >
                     <SelectTrigger>
@@ -2785,9 +3121,9 @@ export default function TasksPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">None</SelectItem>
-                      {(Array.isArray(projects) ? projects : []).map((project) => (
+                      {sortedProjectsForTaskForm.map((project) => (
                         <SelectItem key={project.id} value={project.id}>
-                          {project.name}
+                          {pinnedProjectIds.has(project.id) ? `Pinned • ${project.name}` : project.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -2795,6 +3131,55 @@ export default function TasksPage() {
                   <p className="text-xs text-muted-foreground mt-1">
                     Select a project from the dropdown
                   </p>
+                  {formData.projectId && formData.projectId.trim() !== '' && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <input
+                        id="pin-project"
+                        type="checkbox"
+                        checked={pinSelectedProject}
+                        onChange={(e) => setPinSelectedProject(e.target.checked)}
+                      />
+                      <Label htmlFor="pin-project" className="text-sm">
+                        Pin this project
+                      </Label>
+                    </div>
+                  )}
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setIsPinManagerOpen((v) => !v)}
+                    >
+                      {isPinManagerOpen ? 'Hide pin manager' : 'Pin multiple projects'}
+                    </Button>
+                  </div>
+                  {isPinManagerOpen && (
+                    <div className="mt-2 max-h-48 overflow-y-auto rounded-md border p-3 space-y-2">
+                      <div className="text-xs text-muted-foreground">
+                        Select multiple projects to pin/unpin. Pinned projects appear at top of the Project dropdown.
+                      </div>
+                      {sortedProjectsForTaskForm.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">No projects available.</div>
+                      ) : (
+                        sortedProjectsForTaskForm.map((project) => {
+                          const checked = pinnedProjectIds.has(project.id)
+                          const checkboxId = `pin-multi-${project.id}`
+                          return (
+                            <label key={project.id} htmlFor={checkboxId} className="flex items-center gap-2 text-sm">
+                              <input
+                                id={checkboxId}
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => togglePinnedProjectId(project.id)}
+                              />
+                              <span className={checked ? 'font-medium' : ''}>{project.name}</span>
+                            </label>
+                          )
+                        })
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <Label htmlFor="brand">Brand (Optional)</Label>
@@ -3235,20 +3620,6 @@ export default function TasksPage() {
                 className="w-64"
               />
               <div className="flex items-center gap-2">
-                <Label htmlFor="department-filter" className="text-sm">Department:</Label>
-                <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
-                  <SelectTrigger id="department-filter" className="w-48">
-                    <SelectValue placeholder="All Departments" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Departments</SelectItem>
-                    {departments.map((dept) => (
-                      <SelectItem key={dept} value={dept}>
-                        {dept}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
                 <Label htmlFor="sort-select" className="text-sm">Sort by:</Label>
                 <Select value={myTasksSort} onValueChange={(value) => setMyTasksSort(value as 'default' | 'alphabetical')}>
                   <SelectTrigger id="sort-select" className="w-48">
@@ -3285,26 +3656,30 @@ export default function TasksPage() {
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.3 }}
                   >
-                    {renderTasks(tasks, myTasksSort)}
+                    {renderTasks(projectFilter ? allProjectTasks : tasks, myTasksSort, projectFilter ? myTasksPage : undefined, projectFilter ? myTasksItemsPerPage : undefined)}
                   </motion.div>
                 )}
               </AnimatePresence>
-              {!isInitialLoadingMyTasks && tasks.length > 0 && (
+              {!isInitialLoadingMyTasks && (projectFilter ? allProjectTasks.length > 0 : tasks.length > 0) && (
                 <PaginationControls
                   currentPage={myTasksPage}
-                  totalPages={Math.ceil(myTasksTotal / myTasksItemsPerPage) || 1}
+                  totalPages={Math.ceil((projectFilter ? allProjectTasks.length : myTasksTotal) / myTasksItemsPerPage) || 1}
                   itemsPerPage={myTasksItemsPerPage}
-                  totalItems={myTasksTotal}
+                  totalItems={projectFilter ? allProjectTasks.length : myTasksTotal}
                   onPageChange={async (page) => {
                     setMyTasksPage(page)
-                    // Manually fetch only when page changes
-                    await fetchTasks()
+                    // When project filter is active, pagination is client-side only
+                    if (!projectFilter) {
+                      await fetchTasks(page, undefined)
+                    }
                   }}
                   onItemsPerPageChange={async (items) => {
                     setMyTasksItemsPerPage(items)
                     setMyTasksPage(1)
-                    // Manually fetch only when items per page changes
-                    await fetchTasks()
+                    // When project filter is active, pagination is client-side only
+                    if (!projectFilter) {
+                      await fetchTasks(1, items)
+                    }
                   }}
                 />
               )}
@@ -3362,26 +3737,30 @@ export default function TasksPage() {
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.3 }}
                   >
-                    {renderTasks(getUnderReviewTasks())}
+                    {renderTasks(projectFilter ? allProjectTasks : getUnderReviewTasks(), 'default', projectFilter ? reviewTasksPage : undefined, projectFilter ? reviewTasksItemsPerPage : undefined)}
                   </motion.div>
                 )}
               </AnimatePresence>
-              {!isInitialLoadingReviewTasks && reviewTasks.length > 0 && (
+              {!isInitialLoadingReviewTasks && (projectFilter ? allProjectTasks.length > 0 : reviewTasks.length > 0) && (
                 <PaginationControls
                   currentPage={reviewTasksPage}
-                  totalPages={Math.ceil(reviewTasksTotal / reviewTasksItemsPerPage) || 1}
+                  totalPages={Math.ceil((projectFilter ? allProjectTasks.length : reviewTasksTotal) / reviewTasksItemsPerPage) || 1}
                   itemsPerPage={reviewTasksItemsPerPage}
-                  totalItems={reviewTasksTotal}
+                  totalItems={projectFilter ? allProjectTasks.length : reviewTasksTotal}
                   onPageChange={async (page) => {
                     setReviewTasksPage(page)
-                    // Manually fetch only when page changes
-                    await fetchReviewTasks()
+                    // When project filter is active, pagination is client-side only
+                    if (!projectFilter) {
+                      await fetchReviewTasks(page, undefined)
+                    }
                   }}
                   onItemsPerPageChange={async (items) => {
                     setReviewTasksItemsPerPage(items)
                     setReviewTasksPage(1)
-                    // Manually fetch only when items per page changes
-                    await fetchReviewTasks()
+                    // When project filter is active, pagination is client-side only
+                    if (!projectFilter) {
+                      await fetchReviewTasks(1, items)
+                    }
                   }}
                 />
               )}
@@ -3416,10 +3795,30 @@ export default function TasksPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <Label htmlFor="member-filter-other" className="text-sm">Member:</Label>
+                  <Select
+                    value={otherDeptMemberFilter}
+                    onValueChange={setOtherDeptMemberFilter}
+                    disabled={departmentFilter === 'all'}
+                  >
+                    <SelectTrigger id="member-filter-other" className="w-56">
+                      <SelectValue placeholder={departmentFilter === 'all' ? 'Select department first' : 'All members'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Members</SelectItem>
+                      {availableOtherDeptMembers.map((member) => (
+                        <SelectItem key={member.id} value={member.id}>
+                          {member.name || member.email}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <div className="text-sm text-muted-foreground">
                     {isInitialLoadingOtherDept
                       ? 'Loading tasks from other departments...'
-                      : `Showing ${otherDepartmentTasks.length} task${otherDepartmentTasks.length !== 1 ? 's' : ''}`}
+                      : projectFilter
+                        ? `Showing ${allProjectTasks.length} task${allProjectTasks.length !== 1 ? 's' : ''}`
+                        : `Showing ${getFilteredAndSortedTasks(otherDepartmentTasks, 'default', taskSearchQuery, true).length} of ${otherDeptTasksTotal} task${otherDeptTasksTotal !== 1 ? 's' : ''}`}
                   </div>
                 </div>
               </div>
@@ -3461,23 +3860,27 @@ export default function TasksPage() {
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.3 }}
                   >
-                    {renderTasks(otherDepartmentTasks)}
-                    {!isInitialLoadingOtherDept && otherDepartmentTasks.length > 0 && (
+                    {renderTasks(projectFilter ? allProjectTasks : otherDepartmentTasks, 'default', projectFilter ? otherDeptTasksPage : undefined, projectFilter ? otherDeptTasksItemsPerPage : undefined, true)}
+                    {!isInitialLoadingOtherDept && (projectFilter ? allProjectTasks.length > 0 : otherDepartmentTasks.length > 0) && (
                       <PaginationControls
                         currentPage={otherDeptTasksPage}
-                        totalPages={Math.ceil(otherDeptTasksTotal / otherDeptTasksItemsPerPage) || 1}
+                        totalPages={Math.ceil((projectFilter ? allProjectTasks.length : otherDeptTasksTotal) / otherDeptTasksItemsPerPage) || 1}
                         itemsPerPage={otherDeptTasksItemsPerPage}
-                        totalItems={otherDeptTasksTotal}
+                        totalItems={projectFilter ? allProjectTasks.length : otherDeptTasksTotal}
                   onPageChange={async (page) => {
                     setOtherDeptTasksPage(page)
-                    // Manually fetch only when page changes
-                    await fetchOtherDepartmentTasks()
+                    // When project filter is active, pagination is client-side only
+                    if (!projectFilter) {
+                      await fetchOtherDepartmentTasks(page, undefined)
+                    }
                   }}
                   onItemsPerPageChange={async (items) => {
                     setOtherDeptTasksItemsPerPage(items)
                     setOtherDeptTasksPage(1)
-                    // Manually fetch only when items per page changes
-                    await fetchOtherDepartmentTasks()
+                    // When project filter is active, pagination is client-side only
+                    if (!projectFilter) {
+                      await fetchOtherDepartmentTasks(1, items)
+                    }
                   }}
                       />
                     )}

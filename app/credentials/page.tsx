@@ -127,7 +127,7 @@ export default function CredentialsPage() {
   const [selectedDepartmentMemberId, setSelectedDepartmentMemberId] = useState<string | null>(null)
   const [departmentMembers, setDepartmentMembers] = useState<User[]>([])
   const [currentUserDepartment, setCurrentUserDepartment] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'all' | 'my' | 'shared' | 'department'>('all')
+  const [activeTab, setActiveTab] = useState<'my' | 'shared' | 'department'>('my')
   const [filterCompany, setFilterCompany] = useState<string>('')
   const [filterGeography, setFilterGeography] = useState<string>('')
   const [filterPlatform, setFilterPlatform] = useState<string>('')
@@ -138,6 +138,16 @@ export default function CredentialsPage() {
   const [isGeographyOpen, setIsGeographyOpen] = useState(false)
   const [isPlatformOpen, setIsPlatformOpen] = useState(false)
   const [isInitialLoading, setIsInitialLoading] = useState(true)
+
+  const normalizeFilterValue = useCallback((value: string) => value.trim().toLowerCase(), [])
+
+  // Dropdown options for DB-backed filters
+  const [companyOptions, setCompanyOptions] = useState<string[]>([])
+  const [geographyOptions, setGeographyOptions] = useState<string[]>([])
+  const [platformOptions, setPlatformOptions] = useState<string[]>([])
+  const [isLoadingCompanyOptions, setIsLoadingCompanyOptions] = useState(false)
+  const [isLoadingGeographyOptions, setIsLoadingGeographyOptions] = useState(false)
+  const [isLoadingPlatformOptions, setIsLoadingPlatformOptions] = useState(false)
 
   const fetchCredentials = useCallback(async (): Promise<Credential[]> => {
     try {
@@ -179,7 +189,6 @@ export default function CredentialsPage() {
           c.createdBy.department === currentUserDepartment &&
           c.createdBy.id !== currentUser?.id
         )
-      case 'all':
       default:
         return credentialsArray
     }
@@ -246,6 +255,22 @@ export default function CredentialsPage() {
     return Array.from(companies).sort()
   }, [filteredCredentialsByTab])
 
+  const commitCompanyFilter = useCallback((raw: string) => {
+    const trimmed = raw.trim()
+    if (!trimmed) {
+      setFilterCompany('')
+      setCompanyInputValue('')
+      setIsCompanyOpen(false)
+      return
+    }
+    const normalized = normalizeFilterValue(trimmed)
+    const match = allCompanies.find((c) => normalizeFilterValue(c) === normalized)
+    const finalValue = match ?? trimmed
+    setFilterCompany(finalValue)
+    setCompanyInputValue(finalValue)
+    setIsCompanyOpen(false)
+  }, [allCompanies, normalizeFilterValue])
+
   // Filter companies based on input value
   const filteredCompanies = useMemo(() => {
     if (!companyInputValue.trim()) {
@@ -287,6 +312,38 @@ export default function CredentialsPage() {
     })
     return Array.from(platforms).sort()
   }, [filteredCredentialsByTab, filterCompany, filterGeography])
+
+  const commitGeographyFilter = useCallback((raw: string) => {
+    const trimmed = raw.trim()
+    if (!trimmed) {
+      setFilterGeography('')
+      setGeographyInputValue('')
+      setIsGeographyOpen(false)
+      return
+    }
+    const normalized = normalizeFilterValue(trimmed)
+    const match = allGeographies.find((g) => normalizeFilterValue(g) === normalized)
+    const finalValue = match ?? trimmed
+    setFilterGeography(finalValue)
+    setGeographyInputValue(finalValue)
+    setIsGeographyOpen(false)
+  }, [allGeographies, normalizeFilterValue])
+
+  const commitPlatformFilter = useCallback((raw: string) => {
+    const trimmed = raw.trim()
+    if (!trimmed) {
+      setFilterPlatform('')
+      setPlatformInputValue('')
+      setIsPlatformOpen(false)
+      return
+    }
+    const normalized = normalizeFilterValue(trimmed)
+    const match = allPlatforms.find((p) => normalizeFilterValue(p) === normalized)
+    const finalValue = match ?? trimmed
+    setFilterPlatform(finalValue)
+    setPlatformInputValue(finalValue)
+    setIsPlatformOpen(false)
+  }, [allPlatforms, normalizeFilterValue])
 
   // Filter platforms based on input value
   const filteredPlatformsByInput = useMemo(() => {
@@ -412,10 +469,191 @@ export default function CredentialsPage() {
     }
   }, [fetchCredentials])
 
+  const fetchCompanyOptions = useCallback(async () => {
+    setIsLoadingCompanyOptions(true)
+    try {
+      const companies = await apiClient.getCredentialCompanies()
+      setCompanyOptions(Array.isArray(companies) ? companies : [])
+    } catch (e) {
+      console.error('Failed to fetch credential companies:', e)
+      setCompanyOptions([])
+    } finally {
+      setIsLoadingCompanyOptions(false)
+    }
+  }, [])
+
+  const fetchGeographyOptions = useCallback(async (company?: string) => {
+    setIsLoadingGeographyOptions(true)
+    try {
+      const geos = await apiClient.getCredentialGeographies(company)
+      setGeographyOptions(Array.isArray(geos) ? geos : [])
+    } catch (e) {
+      console.error('Failed to fetch credential geographies:', e)
+      setGeographyOptions([])
+    } finally {
+      setIsLoadingGeographyOptions(false)
+    }
+  }, [])
+
+  const fetchPlatformOptions = useCallback(async (company?: string, geography?: string) => {
+    setIsLoadingPlatformOptions(true)
+    try {
+      const platforms = await apiClient.getCredentialPlatforms(company, geography)
+      setPlatformOptions(Array.isArray(platforms) ? platforms : [])
+    } catch (e) {
+      console.error('Failed to fetch credential platforms:', e)
+      setPlatformOptions([])
+    } finally {
+      setIsLoadingPlatformOptions(false)
+    }
+  }, [])
+
+  // Load DB-backed dropdown values
+  useEffect(() => {
+    fetchCompanyOptions()
+  }, [fetchCompanyOptions])
+
+  useEffect(() => {
+    // Company change -> reset dependent filters + fetch next-level options
+    setFilterGeography('')
+    setFilterPlatform('')
+    setGeographyInputValue('')
+    setPlatformInputValue('')
+    setGeographyOptions([])
+    setPlatformOptions([])
+
+    if (filterCompany) {
+      fetchGeographyOptions(filterCompany)
+    }
+  }, [filterCompany, fetchGeographyOptions])
+
+  useEffect(() => {
+    // Geography change -> reset platform + fetch platform options
+    setFilterPlatform('')
+    setPlatformInputValue('')
+    setPlatformOptions([])
+
+    if (filterCompany && filterGeography) {
+      fetchPlatformOptions(filterCompany, filterGeography)
+    }
+  }, [filterCompany, filterGeography, fetchPlatformOptions])
+
   const resetForm = useCallback(() => {
     setFormData(initialFormData)
     setEditingCredential(null)
   }, [])
+
+  const renderDbBackedCredentialFilters = () => {
+    return (
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="min-w-[180px]">
+          <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
+          <Select
+            value={filterCompany || 'all'}
+            onValueChange={(value) => {
+              const next = value === 'all' ? '' : value
+              setFilterCompany(next)
+              setCompanyInputValue(next)
+            }}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder={isLoadingCompanyOptions ? 'Loading companies...' : 'Select company'} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companyOptions.map((company) => (
+                <SelectItem key={company} value={company}>
+                  {company}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="min-w-[180px]">
+          <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
+          <Select
+            value={filterGeography || 'all'}
+            onValueChange={(value) => {
+              const next = value === 'all' ? '' : value
+              setFilterGeography(next)
+              setGeographyInputValue(next)
+            }}
+          >
+            <SelectTrigger className="w-full" disabled={!filterCompany}>
+              <SelectValue
+                placeholder={
+                  !filterCompany
+                    ? 'Select company first'
+                    : isLoadingGeographyOptions
+                      ? 'Loading geographies...'
+                      : 'Select geography'
+                }
+              />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Geographies</SelectItem>
+              {geographyOptions.map((geo) => (
+                <SelectItem key={geo} value={geo}>
+                  {geo}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="min-w-[180px]">
+          <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
+          <Select
+            value={filterPlatform || 'all'}
+            onValueChange={(value) => {
+              const next = value === 'all' ? '' : value
+              setFilterPlatform(next)
+              setPlatformInputValue(next)
+            }}
+          >
+            <SelectTrigger className="w-full" disabled={!filterCompany || !filterGeography}>
+              <SelectValue
+                placeholder={
+                  !filterCompany || !filterGeography
+                    ? 'Select company & geography first'
+                    : isLoadingPlatformOptions
+                      ? 'Loading platforms...'
+                      : 'Select platform'
+                }
+              />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Platforms</SelectItem>
+              {platformOptions.map((platform) => (
+                <SelectItem key={platform} value={platform}>
+                  {platform}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {(filterCompany || filterGeography || filterPlatform) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setFilterCompany('')
+              setFilterGeography('')
+              setFilterPlatform('')
+              setCompanyInputValue('')
+              setGeographyInputValue('')
+              setPlatformInputValue('')
+            }}
+            className="mt-6"
+          >
+            Clear Filters
+          </Button>
+        )}
+      </div>
+    )
+  }
 
   const openCreateDialog = useCallback(() => {
     resetForm()
@@ -905,9 +1143,8 @@ export default function CredentialsPage() {
           })}
         </div>
 
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'all' | 'my' | 'shared' | 'department')} className="space-y-4">
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="all">All Credentials</TabsTrigger>
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'my' | 'shared' | 'department')} className="space-y-4">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="my">My Credentials</TabsTrigger>
             <TabsTrigger value="shared">Shared Credentials</TabsTrigger>
             <TabsTrigger value="department">Department Credentials</TabsTrigger>
@@ -948,17 +1185,17 @@ export default function CredentialsPage() {
                   transition={{ duration: 0.3 }}
                 >
                   <Card>
-            <CardHeader className="flex flex-col gap-4">
-              <div className="flex flex-row items-center justify-between">
-                <CardTitle>Credentials</CardTitle>
-                <div className="flex items-center gap-2">
+            <CardHeader className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <CardTitle className="mr-4">Credentials</CardTitle>
                   {departmentMembers.length > 0 && (
                     <Select
                       value={selectedDepartmentMemberId || 'all'}
                       onValueChange={(value) => setSelectedDepartmentMemberId(value === 'all' ? null : value)}
                     >
-                      <SelectTrigger className="w-64">
-                        <SelectValue placeholder="Filter by department member" />
+                      <SelectTrigger className="w-56">
+                        <SelectValue placeholder="All Members" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">All Members</SelectItem>
@@ -982,158 +1219,114 @@ export default function CredentialsPage() {
                     Export
                   </Button>
                 </div>
-              </div>
-              
-              {/* Company, Geography, Platform Filters */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex-1 min-w-[200px]">
-                  <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
-                  <div className="relative">
-                    <Input
-                      placeholder="Select or type company..."
-                      value={companyInputValue || filterCompany}
-                      onChange={(e) => {
-                        setCompanyInputValue(e.target.value)
-                        setIsCompanyOpen(true)
+
+                {/* Inline filters: Company, Geography, Platform - Right side */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex-1 min-w-[200px]">
+                    <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
+                    <Select
+                      value={filterCompany || 'all'}
+                      onValueChange={(value) => {
+                        const next = value === 'all' ? '' : value
+                        setFilterCompany(next)
+                        setCompanyInputValue(next)
                       }}
-                      onFocus={() => setIsCompanyOpen(true)}
-                      className="w-full"
-                    />
-                    {isCompanyOpen && filteredCompanies.length > 0 && (
-                      <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                        <div
-                          className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                          onClick={() => {
-                            setFilterCompany('')
-                            setCompanyInputValue('')
-                            setIsCompanyOpen(false)
-                          }}
-                        >
-                          Clear filter
-                        </div>
-                        {filteredCompanies.map((company) => (
-                          <div
-                            key={company}
-                            className="p-2 cursor-pointer hover:bg-accent text-sm"
-                            onClick={() => {
-                              setFilterCompany(company)
-                              setCompanyInputValue(company)
-                              setIsCompanyOpen(false)
-                            }}
-                          >
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder={isLoadingCompanyOptions ? 'Loading companies...' : 'Select company'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Companies</SelectItem>
+                        {companyOptions.map((company) => (
+                          <SelectItem key={company} value={company}>
                             {company}
-                          </div>
+                          </SelectItem>
                         ))}
-                      </div>
-                    )}
+                      </SelectContent>
+                    </Select>
                   </div>
-                </div>
-                
-                <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                  <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
-                  <div className="relative">
-                    <Input
-                      placeholder={filterCompany ? "Select or type geography..." : "Select company first"}
-                      value={geographyInputValue || filterGeography}
-                      onChange={(e) => {
-                        setGeographyInputValue(e.target.value)
-                        setIsGeographyOpen(true)
+
+                  <div className="flex-1 min-w-[200px]">
+                    <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
+                    <Select
+                      value={filterGeography || 'all'}
+                      onValueChange={(value) => {
+                        const next = value === 'all' ? '' : value
+                        setFilterGeography(next)
+                        setGeographyInputValue(next)
                       }}
-                      onFocus={() => filterCompany && setIsGeographyOpen(true)}
-                      disabled={!filterCompany}
-                      className="w-full"
-                    />
-                    {isGeographyOpen && filterCompany && filteredGeographiesByInput.length > 0 && (
-                      <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                        <div
-                          className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                          onClick={() => {
-                            setFilterGeography('')
-                            setGeographyInputValue('')
-                            setIsGeographyOpen(false)
-                          }}
-                        >
-                          Clear filter
-                        </div>
-                        {filteredGeographiesByInput.map((geography) => (
-                          <div
-                            key={geography}
-                            className="p-2 cursor-pointer hover:bg-accent text-sm"
-                            onClick={() => {
-                              setFilterGeography(geography)
-                              setGeographyInputValue(geography)
-                              setIsGeographyOpen(false)
-                            }}
-                          >
-                            {geography}
-                          </div>
+                    >
+                      <SelectTrigger className="w-full" disabled={!filterCompany}>
+                        <SelectValue
+                          placeholder={
+                            !filterCompany
+                              ? 'Select company first'
+                              : isLoadingGeographyOptions
+                                ? 'Loading geographies...'
+                                : 'Select geography'
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Geographies</SelectItem>
+                        {geographyOptions.map((geo) => (
+                          <SelectItem key={geo} value={geo}>
+                            {geo}
+                          </SelectItem>
                         ))}
-                      </div>
-                    )}
+                      </SelectContent>
+                    </Select>
                   </div>
-                </div>
-                
-                <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                  <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
-                  <div className="relative">
-                    <Input
-                      placeholder={filterCompany && filterGeography ? "Select or type platform..." : "Select company & geography first"}
-                      value={platformInputValue || filterPlatform}
-                      onChange={(e) => {
-                        setPlatformInputValue(e.target.value)
-                        setIsPlatformOpen(true)
+
+                  <div className="flex-1 min-w-[200px]">
+                    <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
+                    <Select
+                      value={filterPlatform || 'all'}
+                      onValueChange={(value) => {
+                        const next = value === 'all' ? '' : value
+                        setFilterPlatform(next)
+                        setPlatformInputValue(next)
                       }}
-                      onFocus={() => filterCompany && filterGeography && setIsPlatformOpen(true)}
-                      disabled={!filterCompany || !filterGeography}
-                      className="w-full"
-                    />
-                    {isPlatformOpen && filterCompany && filterGeography && filteredPlatformsByInput.length > 0 && (
-                      <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                        <div
-                          className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                          onClick={() => {
-                            setFilterPlatform('')
-                            setPlatformInputValue('')
-                            setIsPlatformOpen(false)
-                          }}
-                        >
-                          Clear filter
-                        </div>
-                        {filteredPlatformsByInput.map((platform) => (
-                          <div
-                            key={platform}
-                            className="p-2 cursor-pointer hover:bg-accent text-sm"
-                            onClick={() => {
-                              setFilterPlatform(platform)
-                              setPlatformInputValue(platform)
-                              setIsPlatformOpen(false)
-                            }}
-                          >
+                    >
+                      <SelectTrigger className="w-full" disabled={!filterCompany || !filterGeography}>
+                        <SelectValue
+                          placeholder={
+                            !filterCompany || !filterGeography
+                              ? 'Select company & geography first'
+                              : isLoadingPlatformOptions
+                                ? 'Loading platforms...'
+                                : 'Select platform'
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Platforms</SelectItem>
+                        {platformOptions.map((platform) => (
+                          <SelectItem key={platform} value={platform}>
                             {platform}
-                          </div>
+                          </SelectItem>
                         ))}
-                      </div>
-                    )}
+                      </SelectContent>
+                    </Select>
                   </div>
+
+                  {(filterCompany || filterGeography || filterPlatform) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setFilterCompany('')
+                        setFilterGeography('')
+                        setFilterPlatform('')
+                        setCompanyInputValue('')
+                        setGeographyInputValue('')
+                        setPlatformInputValue('')
+                      }}
+                    >
+                      Clear Filters
+                    </Button>
+                  )}
                 </div>
-                
-                {(filterCompany || filterGeography || filterPlatform) && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setFilterCompany('')
-                      setFilterGeography('')
-                      setFilterPlatform('')
-                      setCompanyInputValue('')
-                      setGeographyInputValue('')
-                      setPlatformInputValue('')
-                    }}
-                    className="mt-6"
-                  >
-                    Clear Filters
-                  </Button>
-                )}
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -1157,17 +1350,17 @@ export default function CredentialsPage() {
               {filteredCredentialsByTab
                 .filter(credential => {
                   // Filter by company
-                  if (filterCompany && credential.company !== filterCompany) {
+                  if (filterCompany && normalizeFilterValue(credential.company || '') !== normalizeFilterValue(filterCompany)) {
                     return false
                   }
                   
                   // Filter by geography
-                  if (filterGeography && credential.geography !== filterGeography) {
+                  if (filterGeography && normalizeFilterValue(credential.geography || '') !== normalizeFilterValue(filterGeography)) {
                     return false
                   }
                   
                   // Filter by platform
-                  if (filterPlatform && credential.platform !== filterPlatform) {
+                  if (filterPlatform && normalizeFilterValue(credential.platform || '') !== normalizeFilterValue(filterPlatform)) {
                     return false
                   }
                   
@@ -1388,17 +1581,17 @@ export default function CredentialsPage() {
               </Card>
             ) : (
               <Card>
-                <CardHeader className="flex flex-col gap-4">
-                  <div className="flex flex-row items-center justify-between">
-                    <CardTitle>My Credentials</CardTitle>
-                    <div className="flex items-center gap-2">
+                <CardHeader className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <CardTitle>My Credentials</CardTitle>
                       {departmentMembers.length > 0 && (
                         <Select
                           value={selectedDepartmentMemberId || 'all'}
                           onValueChange={(value) => setSelectedDepartmentMemberId(value === 'all' ? null : value)}
                         >
-                          <SelectTrigger className="w-64">
-                            <SelectValue placeholder="Filter by department member" />
+                          <SelectTrigger className="w-56">
+                            <SelectValue placeholder="All Members" />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="all">All Members</SelectItem>
@@ -1422,158 +1615,9 @@ export default function CredentialsPage() {
                         Export
                       </Button>
                     </div>
-                  </div>
-                  
-                  {/* Company, Geography, Platform Filters */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                      <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
-                      <div className="relative">
-                        <Input
-                          placeholder="Select or type company..."
-                          value={companyInputValue || filterCompany}
-                          onChange={(e) => {
-                            setCompanyInputValue(e.target.value)
-                            setIsCompanyOpen(true)
-                          }}
-                          onFocus={() => setIsCompanyOpen(true)}
-                          className="w-full"
-                        />
-                        {isCompanyOpen && filteredCompanies.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                            <div
-                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                              onClick={() => {
-                                setFilterCompany('')
-                                setCompanyInputValue('')
-                                setIsCompanyOpen(false)
-                              }}
-                            >
-                              Clear filter
-                            </div>
-                            {filteredCompanies.map((company) => (
-                              <div
-                                key={company}
-                                className="p-2 cursor-pointer hover:bg-accent text-sm"
-                                onClick={() => {
-                                  setFilterCompany(company)
-                                  setCompanyInputValue(company)
-                                  setIsCompanyOpen(false)
-                                }}
-                              >
-                                {company}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                      <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
-                      <div className="relative">
-                        <Input
-                          placeholder={filterCompany ? "Select or type geography..." : "Select company first"}
-                          value={geographyInputValue || filterGeography}
-                          onChange={(e) => {
-                            setGeographyInputValue(e.target.value)
-                            setIsGeographyOpen(true)
-                          }}
-                          onFocus={() => filterCompany && setIsGeographyOpen(true)}
-                          disabled={!filterCompany}
-                          className="w-full"
-                        />
-                        {isGeographyOpen && filterCompany && filteredGeographiesByInput.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                            <div
-                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                              onClick={() => {
-                                setFilterGeography('')
-                                setGeographyInputValue('')
-                                setIsGeographyOpen(false)
-                              }}
-                            >
-                              Clear filter
-                            </div>
-                            {filteredGeographiesByInput.map((geography) => (
-                              <div
-                                key={geography}
-                                className="p-2 cursor-pointer hover:bg-accent text-sm"
-                                onClick={() => {
-                                  setFilterGeography(geography)
-                                  setGeographyInputValue(geography)
-                                  setIsGeographyOpen(false)
-                                }}
-                              >
-                                {geography}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                      <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
-                      <div className="relative">
-                        <Input
-                          placeholder={filterCompany && filterGeography ? "Select or type platform..." : "Select company & geography first"}
-                          value={platformInputValue || filterPlatform}
-                          onChange={(e) => {
-                            setPlatformInputValue(e.target.value)
-                            setIsPlatformOpen(true)
-                          }}
-                          onFocus={() => filterCompany && filterGeography && setIsPlatformOpen(true)}
-                          disabled={!filterCompany || !filterGeography}
-                          className="w-full"
-                        />
-                        {isPlatformOpen && filterCompany && filterGeography && filteredPlatformsByInput.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                            <div
-                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                              onClick={() => {
-                                setFilterPlatform('')
-                                setPlatformInputValue('')
-                                setIsPlatformOpen(false)
-                              }}
-                            >
-                              Clear filter
-                            </div>
-                            {filteredPlatformsByInput.map((platform) => (
-                              <div
-                                key={platform}
-                                className="p-2 cursor-pointer hover:bg-accent text-sm"
-                                onClick={() => {
-                                  setFilterPlatform(platform)
-                                  setPlatformInputValue(platform)
-                                  setIsPlatformOpen(false)
-                                }}
-                              >
-                                {platform}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    {(filterCompany || filterGeography || filterPlatform) && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setFilterCompany('')
-                          setFilterGeography('')
-                          setFilterPlatform('')
-                          setCompanyInputValue('')
-                          setGeographyInputValue('')
-                          setPlatformInputValue('')
-                        }}
-                        className="mt-6"
-                      >
-                        Clear Filters
-                      </Button>
-                    )}
+
+                    {/* Inline filters: Company, Geography, Platform - Right side */}
+                    {renderDbBackedCredentialFilters()}
                   </div>
                 </CardHeader>
                 <CardContent className="p-0">
@@ -1823,17 +1867,17 @@ export default function CredentialsPage() {
               </Card>
             ) : (
               <Card>
-                <CardHeader className="flex flex-col gap-4">
-                  <div className="flex flex-row items-center justify-between">
-                    <CardTitle>Shared Credentials</CardTitle>
-                    <div className="flex items-center gap-2">
+                <CardHeader className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <CardTitle>Shared Credentials</CardTitle>
                       {departmentMembers.length > 0 && (
                         <Select
                           value={selectedDepartmentMemberId || 'all'}
                           onValueChange={(value) => setSelectedDepartmentMemberId(value === 'all' ? null : value)}
                         >
-                          <SelectTrigger className="w-64">
-                            <SelectValue placeholder="Filter by department member" />
+                          <SelectTrigger className="w-56">
+                            <SelectValue placeholder="All Members" />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="all">All Members</SelectItem>
@@ -1857,158 +1901,9 @@ export default function CredentialsPage() {
                         Export
                       </Button>
                     </div>
-                  </div>
-                  
-                  {/* Company, Geography, Platform Filters */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                      <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
-                      <div className="relative">
-                        <Input
-                          placeholder="Select or type company..."
-                          value={companyInputValue || filterCompany}
-                          onChange={(e) => {
-                            setCompanyInputValue(e.target.value)
-                            setIsCompanyOpen(true)
-                          }}
-                          onFocus={() => setIsCompanyOpen(true)}
-                          className="w-full"
-                        />
-                        {isCompanyOpen && filteredCompanies.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                            <div
-                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                              onClick={() => {
-                                setFilterCompany('')
-                                setCompanyInputValue('')
-                                setIsCompanyOpen(false)
-                              }}
-                            >
-                              Clear filter
-                            </div>
-                            {filteredCompanies.map((company) => (
-                              <div
-                                key={company}
-                                className="p-2 cursor-pointer hover:bg-accent text-sm"
-                                onClick={() => {
-                                  setFilterCompany(company)
-                                  setCompanyInputValue(company)
-                                  setIsCompanyOpen(false)
-                                }}
-                              >
-                                {company}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                      <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
-                      <div className="relative">
-                        <Input
-                          placeholder={filterCompany ? "Select or type geography..." : "Select company first"}
-                          value={geographyInputValue || filterGeography}
-                          onChange={(e) => {
-                            setGeographyInputValue(e.target.value)
-                            setIsGeographyOpen(true)
-                          }}
-                          onFocus={() => filterCompany && setIsGeographyOpen(true)}
-                          disabled={!filterCompany}
-                          className="w-full"
-                        />
-                        {isGeographyOpen && filterCompany && filteredGeographiesByInput.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                            <div
-                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                              onClick={() => {
-                                setFilterGeography('')
-                                setGeographyInputValue('')
-                                setIsGeographyOpen(false)
-                              }}
-                            >
-                              Clear filter
-                            </div>
-                            {filteredGeographiesByInput.map((geography) => (
-                              <div
-                                key={geography}
-                                className="p-2 cursor-pointer hover:bg-accent text-sm"
-                                onClick={() => {
-                                  setFilterGeography(geography)
-                                  setGeographyInputValue(geography)
-                                  setIsGeographyOpen(false)
-                                }}
-                              >
-                                {geography}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                      <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
-                      <div className="relative">
-                        <Input
-                          placeholder={filterCompany && filterGeography ? "Select or type platform..." : "Select company & geography first"}
-                          value={platformInputValue || filterPlatform}
-                          onChange={(e) => {
-                            setPlatformInputValue(e.target.value)
-                            setIsPlatformOpen(true)
-                          }}
-                          onFocus={() => filterCompany && filterGeography && setIsPlatformOpen(true)}
-                          disabled={!filterCompany || !filterGeography}
-                          className="w-full"
-                        />
-                        {isPlatformOpen && filterCompany && filterGeography && filteredPlatformsByInput.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                            <div
-                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                              onClick={() => {
-                                setFilterPlatform('')
-                                setPlatformInputValue('')
-                                setIsPlatformOpen(false)
-                              }}
-                            >
-                              Clear filter
-                            </div>
-                            {filteredPlatformsByInput.map((platform) => (
-                              <div
-                                key={platform}
-                                className="p-2 cursor-pointer hover:bg-accent text-sm"
-                                onClick={() => {
-                                  setFilterPlatform(platform)
-                                  setPlatformInputValue(platform)
-                                  setIsPlatformOpen(false)
-                                }}
-                              >
-                                {platform}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    {(filterCompany || filterGeography || filterPlatform) && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setFilterCompany('')
-                          setFilterGeography('')
-                          setFilterPlatform('')
-                          setCompanyInputValue('')
-                          setGeographyInputValue('')
-                          setPlatformInputValue('')
-                        }}
-                        className="mt-6"
-                      >
-                        Clear Filters
-                      </Button>
-                    )}
+
+                    {/* Inline filters: Company, Geography, Platform - Right side */}
+                    {renderDbBackedCredentialFilters()}
                   </div>
                 </CardHeader>
                 <CardContent className="p-0">
@@ -2258,17 +2153,17 @@ export default function CredentialsPage() {
               </Card>
             ) : (
               <Card>
-                <CardHeader className="flex flex-col gap-4">
-                  <div className="flex flex-row items-center justify-between">
-                    <CardTitle>Department Credentials</CardTitle>
-                    <div className="flex items-center gap-2">
+                <CardHeader className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <CardTitle>Department Credentials</CardTitle>
                       {departmentMembers.length > 0 && (
                         <Select
                           value={selectedDepartmentMemberId || 'all'}
                           onValueChange={(value) => setSelectedDepartmentMemberId(value === 'all' ? null : value)}
                         >
-                          <SelectTrigger className="w-64">
-                            <SelectValue placeholder="Filter by department member" />
+                          <SelectTrigger className="w-56">
+                            <SelectValue placeholder="All Members" />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="all">All Members</SelectItem>
@@ -2292,158 +2187,9 @@ export default function CredentialsPage() {
                         Export
                       </Button>
                     </div>
-                  </div>
-                  
-                  {/* Company, Geography, Platform Filters */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                      <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
-                      <div className="relative">
-                        <Input
-                          placeholder="Select or type company..."
-                          value={companyInputValue || filterCompany}
-                          onChange={(e) => {
-                            setCompanyInputValue(e.target.value)
-                            setIsCompanyOpen(true)
-                          }}
-                          onFocus={() => setIsCompanyOpen(true)}
-                          className="w-full"
-                        />
-                        {isCompanyOpen && filteredCompanies.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                            <div
-                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                              onClick={() => {
-                                setFilterCompany('')
-                                setCompanyInputValue('')
-                                setIsCompanyOpen(false)
-                              }}
-                            >
-                              Clear filter
-                            </div>
-                            {filteredCompanies.map((company) => (
-                              <div
-                                key={company}
-                                className="p-2 cursor-pointer hover:bg-accent text-sm"
-                                onClick={() => {
-                                  setFilterCompany(company)
-                                  setCompanyInputValue(company)
-                                  setIsCompanyOpen(false)
-                                }}
-                              >
-                                {company}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                      <Label className="text-xs text-muted-foreground mb-1 block">Geography</Label>
-                      <div className="relative">
-                        <Input
-                          placeholder={filterCompany ? "Select or type geography..." : "Select company first"}
-                          value={geographyInputValue || filterGeography}
-                          onChange={(e) => {
-                            setGeographyInputValue(e.target.value)
-                            setIsGeographyOpen(true)
-                          }}
-                          onFocus={() => filterCompany && setIsGeographyOpen(true)}
-                          disabled={!filterCompany}
-                          className="w-full"
-                        />
-                        {isGeographyOpen && filterCompany && filteredGeographiesByInput.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                            <div
-                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                              onClick={() => {
-                                setFilterGeography('')
-                                setGeographyInputValue('')
-                                setIsGeographyOpen(false)
-                              }}
-                            >
-                              Clear filter
-                            </div>
-                            {filteredGeographiesByInput.map((geography) => (
-                              <div
-                                key={geography}
-                                className="p-2 cursor-pointer hover:bg-accent text-sm"
-                                onClick={() => {
-                                  setFilterGeography(geography)
-                                  setGeographyInputValue(geography)
-                                  setIsGeographyOpen(false)
-                                }}
-                              >
-                                {geography}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    <div className="flex-1 min-w-[200px] filter-dropdown-container">
-                      <Label className="text-xs text-muted-foreground mb-1 block">Platform</Label>
-                      <div className="relative">
-                        <Input
-                          placeholder={filterCompany && filterGeography ? "Select or type platform..." : "Select company & geography first"}
-                          value={platformInputValue || filterPlatform}
-                          onChange={(e) => {
-                            setPlatformInputValue(e.target.value)
-                            setIsPlatformOpen(true)
-                          }}
-                          onFocus={() => filterCompany && filterGeography && setIsPlatformOpen(true)}
-                          disabled={!filterCompany || !filterGeography}
-                          className="w-full"
-                        />
-                        {isPlatformOpen && filterCompany && filterGeography && filteredPlatformsByInput.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                            <div
-                              className="p-2 text-xs text-muted-foreground cursor-pointer hover:bg-accent"
-                              onClick={() => {
-                                setFilterPlatform('')
-                                setPlatformInputValue('')
-                                setIsPlatformOpen(false)
-                              }}
-                            >
-                              Clear filter
-                            </div>
-                            {filteredPlatformsByInput.map((platform) => (
-                              <div
-                                key={platform}
-                                className="p-2 cursor-pointer hover:bg-accent text-sm"
-                                onClick={() => {
-                                  setFilterPlatform(platform)
-                                  setPlatformInputValue(platform)
-                                  setIsPlatformOpen(false)
-                                }}
-                              >
-                                {platform}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    {(filterCompany || filterGeography || filterPlatform) && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setFilterCompany('')
-                          setFilterGeography('')
-                          setFilterPlatform('')
-                          setCompanyInputValue('')
-                          setGeographyInputValue('')
-                          setPlatformInputValue('')
-                        }}
-                        className="mt-6"
-                      >
-                        Clear Filters
-                      </Button>
-                    )}
+
+                    {/* Inline filters: Company, Geography, Platform - Right side */}
+                    {renderDbBackedCredentialFilters()}
                   </div>
                 </CardHeader>
                 <CardContent className="p-0">

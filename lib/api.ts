@@ -319,17 +319,21 @@ class ApiClient {
     return data
   }
 
-  async getDepartmentTasks(options?: { limit?: number; skip?: number; useCache?: boolean }): Promise<PaginatedTasksResponse> {
-    const { limit = 100, skip = 0, useCache = false } = options || {}
-    const endpoint = `/tasks/department?limit=${limit}&skip=${skip}`
+  async getDepartmentTasks(options?: { limit?: number; skip?: number; memberId?: string; status?: string; useCache?: boolean }): Promise<PaginatedTasksResponse> {
+    const { limit = 100, skip = 0, memberId, status, useCache = false } = options || {}
+    const memberParam = memberId ? `&memberId=${encodeURIComponent(memberId)}` : ''
+    const statusParam = status ? `&status=${encodeURIComponent(status)}` : ''
+    const endpoint = `/tasks/department?limit=${limit}&skip=${skip}${memberParam}${statusParam}`
     // Don't use cache for paginated requests
     const data = await this.request<PaginatedTasksResponse>(endpoint)
     return data
   }
 
-  async getAllDepartmentsTasks(options?: { limit?: number; skip?: number; useCache?: boolean }): Promise<PaginatedTasksResponse> {
-    const { limit = 20, skip = 0, useCache = false } = options || {}
-    const endpoint = `/tasks/all-departments?limit=${limit}&skip=${skip}`
+  async getAllDepartmentsTasks(options?: { limit?: number; skip?: number; department?: string; memberId?: string; useCache?: boolean }): Promise<PaginatedTasksResponse> {
+    const { limit = 20, skip = 0, department, memberId, useCache = false } = options || {}
+    const deptParam = department ? `&department=${encodeURIComponent(department)}` : ''
+    const memberParam = memberId ? `&memberId=${encodeURIComponent(memberId)}` : ''
+    const endpoint = `/tasks/all-departments?limit=${limit}&skip=${skip}${deptParam}${memberParam}`
     // Don't use cache for paginated requests
     const data = await this.request<PaginatedTasksResponse>(endpoint)
     return data
@@ -583,6 +587,23 @@ class ApiClient {
     // Don't use cache for paginated requests
     const data = await this.request(endpoint)
     return data
+  }
+
+  async getCredentialCompanies(): Promise<string[]> {
+    return this.request('/credentials/filters/companies')
+  }
+
+  async getCredentialGeographies(company?: string): Promise<string[]> {
+    const query = company ? `?company=${encodeURIComponent(company)}` : ''
+    return this.request(`/credentials/filters/geographies${query}`)
+  }
+
+  async getCredentialPlatforms(company?: string, geography?: string): Promise<string[]> {
+    const params = new URLSearchParams()
+    if (company) params.set('company', company)
+    if (geography) params.set('geography', geography)
+    const query = params.toString()
+    return this.request(`/credentials/filters/platforms${query ? `?${query}` : ''}`)
   }
 
   async getCredential(id: string) {

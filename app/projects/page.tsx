@@ -63,6 +63,7 @@ export default function ProjectsPage() {
   const router = useRouter()
   const [projects, setProjects] = useState<Project[]>(() => projectsCache ?? [])
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
+  const [projectsSort, setProjectsSort] = useState<'default' | 'alphabetical'>('default')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false)
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
@@ -371,6 +372,9 @@ export default function ProjectsPage() {
     if (project.name) {
       params.set('projectName', project.name)
     }
+    if (project.department) {
+      params.set('projectDepartment', project.department)
+    }
     router.push(`/tasks?${params.toString()}`)
   }, [router])
 
@@ -550,10 +554,26 @@ export default function ProjectsPage() {
 
   const filteredProjects = useMemo(() => {
     const projectsArray = Array.isArray(projects) ? projects : []
-    return projectsArray.filter(project => 
+    const base = projectsArray.filter(project => 
       matchesSearchQuery(project) && matchesDepartmentFilter(project)
     )
-  }, [projects, matchesSearchQuery, matchesDepartmentFilter])
+
+    const sorted = [...base].sort((a, b) => {
+      if (projectsSort === 'alphabetical') {
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      }
+
+      // Default sort: newest first if createdAt exists; else fall back to name
+      const aTime = (a as any)?.createdAt ? new Date((a as any).createdAt).getTime() : 0
+      const bTime = (b as any)?.createdAt ? new Date((b as any).createdAt).getTime() : 0
+      if (aTime && bTime) return bTime - aTime
+      if (aTime) return -1
+      if (bTime) return 1
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    })
+
+    return sorted
+  }, [projects, matchesSearchQuery, matchesDepartmentFilter, projectsSort])
 
   // Set default department filter for non-Super Admins
   useEffect(() => {
@@ -1100,6 +1120,16 @@ export default function ProjectsPage() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-64"
             />
+            <Label htmlFor="projects-sort" className="text-sm">Sort by:</Label>
+            <Select value={projectsSort} onValueChange={(value) => setProjectsSort(value as 'default' | 'alphabetical')}>
+              <SelectTrigger id="projects-sort" className="w-56">
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">Default (Date)</SelectItem>
+                <SelectItem value="alphabetical">Alphabetical</SelectItem>
+              </SelectContent>
+            </Select>
             {isSuperAdmin && (
               <>
                 <Label htmlFor="department-filter-projects" className="text-sm">Department:</Label>
