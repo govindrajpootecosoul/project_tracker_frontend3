@@ -368,11 +368,19 @@ class ApiClient {
       method: 'PUT',
       body: JSON.stringify(data),
     })
-    // Clear task-related cache
+    // Clear all task-related cache to ensure fresh data
     this.clearCache('/tasks')
     this.clearCache('/tasks/my')
     this.clearCache('/tasks/team')
+    this.clearCache('/tasks/department')
+    this.clearCache('/tasks/all-departments')
     this.clearCache('/tasks/stats')
+    // Clear cache for all view variations
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith(CACHE_PREFIX + '/tasks/stats')) {
+        localStorage.removeItem(key)
+      }
+    })
     return result
   }
 
@@ -556,6 +564,12 @@ class ApiClient {
     return this.request('/email/admin/auto-email-config', {
       method: 'POST',
       body: JSON.stringify(data),
+    })
+  }
+
+  async testAutoEmail() {
+    return this.request('/email/admin/auto-email-config/test', {
+      method: 'POST',
     })
   }
 

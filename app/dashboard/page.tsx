@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { MainLayout } from '@/components/layout/main-layout'
 import { apiClient } from '@/lib/api'
@@ -12,6 +12,7 @@ import { motion } from 'framer-motion'
 import { CheckCircle, Clock, AlertCircle, RefreshCw, TrendingUp, Circle, Pause, FolderKanban, Users, Plus, Edit, Trash2, MessageSquare, Mail, FileCheck } from 'lucide-react'
 import { format, formatDistanceToNow } from 'date-fns'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarProps } from 'recharts'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8']
 
@@ -32,6 +33,7 @@ interface TeamMember {
 
 export default function DashboardPage() {
   const router = useRouter()
+  const queryClient = useQueryClient()
   const navigateToProjectTasks = useCallback((projectId: string, projectName?: string) => {
     const params = new URLSearchParams()
     params.set('projectId', projectId)
@@ -41,8 +43,83 @@ export default function DashboardPage() {
     router.push(`/tasks?${params.toString()}`)
   }, [router])
   const [currentView, setCurrentView] = useState<'my' | 'department' | 'all-departments'>('my')
-  const [userRole, setUserRole] = useState<string>('USER')
-  const [stats, setStats] = useState({
+  const [isScrollingPaused, setIsScrollingPaused] = useState(false)
+  const activitiesContainerRef = useRef<HTMLDivElement | null>(null)
+
+  const token = typeof window !== 'undefined' ? getToken() : null
+
+  const userRoleQuery = useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn: () => apiClient.getUserRole(),
+    enabled: Boolean(token),
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  })
+
+  const statsQuery = useQuery({
+    queryKey: ['tasks', 'stats', currentView],
+    queryFn: () => apiClient.getTaskStats(currentView, false), // Disable cache for fresh data
+    enabled: Boolean(token),
+    staleTime: 0, // Always consider data stale for immediate refetch
+    refetchInterval: 30000, // Refetch every 30 seconds
+  })
+
+  const projectsQuery = useQuery({
+    queryKey: ['projects', 'dashboard', currentView],
+    queryFn: async () => {
+      const projectsData = await apiClient.getProjects({ limit: 100, skip: 0 })
+      return Array.isArray(projectsData) ? projectsData : (projectsData as any)?.projects || []
+    },
+    enabled: Boolean(token),
+    staleTime: 1000 * 60 * 2, // 2 minutes
+  })
+
+  const teamMembersQuery = useQuery({
+    queryKey: ['team', 'members', 'dashboard', currentView],
+    queryFn: async () => {
+      const membersData = await apiClient.getTeamMembers({ limit: 100, skip: 0 })
+      return Array.isArray(membersData) ? membersData : (membersData as any)?.members || []
+    },
+    enabled: Boolean(token),
+    staleTime: 1000 * 60 * 2, // 2 minutes
+  })
+
+  const inProgressTasksQuery = useQuery({
+    queryKey: ['tasks', 'inProgress', currentView],
+    queryFn: async () => {
+      let tasksResult: any
+      if (currentView === 'my') {
+        tasksResult = await apiClient.getMyTasks({ limit: 100, skip: 0 })
+      } else if (currentView === 'department') {
+        tasksResult = await apiClient.getDepartmentTasks({ limit: 100, skip: 0 })
+      } else if (currentView === 'all-departments') {
+        tasksResult = await apiClient.getAllDepartmentsTasks({ limit: 100, skip: 0 })
+      } else {
+        tasksResult = await apiClient.getMyTasks({ limit: 100, skip: 0 })
+      }
+      const tasksData = Array.isArray(tasksResult) ? tasksResult : (tasksResult as any)?.tasks || []
+      return tasksData.filter((task: any) => String(task.status || '').toUpperCase().trim() === 'IN_PROGRESS')
+    },
+    enabled: Boolean(token),
+    staleTime: 0, // Always consider data stale for immediate refetch
+    refetchInterval: 30000, // Refetch every 30 seconds
+  })
+
+  const activitiesQuery = useInfiniteQuery({
+    queryKey: ['activities', currentView],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const data = (await apiClient.getActivities(currentView, { limit: 20, skip: pageParam as number })) as any[]
+      return data
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, page) => sum + page.length, 0)
+      return lastPage.length === 20 ? loaded : undefined
+    },
+    enabled: Boolean(token),
+    staleTime: 0, // Always consider data stale for immediate refetch
+  })
+
+  const stats = (statsQuery.data as any) || {
     totalTasks: 0,
     completedTasks: 0,
     inProgress: 0,
@@ -50,143 +127,14 @@ export default function DashboardPage() {
     onHold: 0,
     overdue: 0,
     recurring: 0,
-  })
-  const [projects, setProjects] = useState<Project[]>([])
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
-  const [activities, setActivities] = useState<any[]>([])
-  const [inProgressTasks, setInProgressTasks] = useState<any[]>([])
-  const [isScrollingPaused, setIsScrollingPaused] = useState(false)
-  const [activitiesLoading, setActivitiesLoading] = useState(false)
-  const [hasMoreActivities, setHasMoreActivities] = useState(true)
-  const [activitiesSkip, setActivitiesSkip] = useState(0)
-  const activitiesContainerRef = useRef<HTMLDivElement | null>(null)
-
-  // Load cached data immediately on mount
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    
-    try {
-      // Try to load from cache synchronously
-      const cacheKey = (key: string) => `api_cache_${key}`
-      const getCached = (key: string) => {
-        try {
-          const cached = localStorage.getItem(cacheKey(key))
-          if (cached) {
-            const { data, timestamp } = JSON.parse(cached)
-            const now = Date.now()
-            if (now - timestamp < 5 * 60 * 1000) { // 5 minutes
-              return data
-            }
-          }
-        } catch {}
-        return null
-      }
-
-      const cachedStats = getCached('/tasks/stats')
-      const cachedProjects = getCached('/projects')
-      const cachedTeamMembers = getCached('/team/members')
-      // Don't load cached activities to ensure we start with fresh pagination
-      // if (cachedActivities) setActivities(cachedActivities)
-
-      if (cachedStats) setStats(cachedStats)
-      if (cachedProjects) setProjects(cachedProjects)
-      if (cachedTeamMembers) setTeamMembers(cachedTeamMembers)
-    } catch (e) {
-      // Ignore cache errors
-    }
-  }, [])
-
-  const fetchStats = useCallback(async () => {
-    try {
-      const [statsData, projectsData, teamMembersData] = await Promise.all([
-        apiClient.getTaskStats(currentView),
-        apiClient.getProjects({ limit: 100, skip: 0 }), // Get more projects for dashboard
-        apiClient.getTeamMembers({ limit: 100, skip: 0 }), // Get more members for dashboard
-      ])
-      setStats(statsData as typeof stats)
-      
-      // Handle new paginated response format
-      const projects = Array.isArray(projectsData) 
-        ? projectsData 
-        : (projectsData as any)?.projects || []
-      const teamMembers = Array.isArray(teamMembersData)
-        ? teamMembersData
-        : (teamMembersData as any)?.members || []
-      
-      setProjects(projects as Project[])
-      setTeamMembers(teamMembers as TeamMember[])
-      
-      // Fetch activities separately to avoid breaking the dashboard if it fails
-      try {
-        const activitiesData = await apiClient.getActivities(currentView, { limit: 20, skip: 0 }) as any[]
-        setActivities(activitiesData)
-        setActivitiesSkip(20)
-        setHasMoreActivities(activitiesData.length === 20) // If we got 20, there might be more
-      } catch (activityError) {
-        console.error('Failed to fetch activities:', activityError)
-        setActivities([]) // Set empty array if activities fail to load
-        setHasMoreActivities(false)
-        setActivitiesSkip(0)
-      }
-
-      // Fetch in-progress tasks based on current view
-      try {
-        let tasksResult: any
-        if (currentView === 'my') {
-          tasksResult = await apiClient.getMyTasks({ limit: 100, skip: 0 })
-        } else if (currentView === 'department') {
-          tasksResult = await apiClient.getDepartmentTasks({ limit: 100, skip: 0 })
-        } else if (currentView === 'all-departments') {
-          tasksResult = await apiClient.getAllDepartmentsTasks({ limit: 100, skip: 0 })
-        } else {
-          tasksResult = await apiClient.getMyTasks({ limit: 100, skip: 0 })
-        }
-        
-        // Handle new paginated response format
-        const tasksData = Array.isArray(tasksResult)
-          ? tasksResult
-          : (tasksResult as any)?.tasks || []
-        
-        // Filter only IN_PROGRESS tasks
-        const inProgress = tasksData.filter((task: any) => {
-          const status = String(task.status || '').toUpperCase().trim()
-          return status === 'IN_PROGRESS'
-        })
-        setInProgressTasks(inProgress)
-      } catch (taskError) {
-        console.error('Failed to fetch in-progress tasks:', taskError)
-        setInProgressTasks([])
-      }
-    } catch (error) {
-      console.error('Failed to fetch stats:', error)
-    }
-  }, [currentView])
-
-  // Load more activities function
-  const loadMoreActivities = useCallback(async () => {
-    if (activitiesLoading || !hasMoreActivities) return
-
-    setActivitiesLoading(true)
-    try {
-      const newActivities = await apiClient.getActivities(currentView, { 
-        limit: 20, 
-        skip: activitiesSkip 
-      }) as any[]
-      
-      if (newActivities.length === 0) {
-        setHasMoreActivities(false)
-      } else {
-        setActivities(prev => [...prev, ...newActivities])
-        setActivitiesSkip(prev => prev + newActivities.length)
-        setHasMoreActivities(newActivities.length === 20) // If we got 20, there might be more
-      }
-    } catch (error) {
-      console.error('Failed to load more activities:', error)
-      setHasMoreActivities(false)
-    } finally {
-      setActivitiesLoading(false)
-    }
-  }, [currentView, activitiesSkip, activitiesLoading, hasMoreActivities])
+  }
+  const projects = (projectsQuery.data as Project[]) || []
+  const teamMembers = (teamMembersQuery.data as TeamMember[]) || []
+  const inProgressTasks = (inProgressTasksQuery.data as any[]) || []
+  const activities = useMemo(() => {
+    const pages = activitiesQuery.data?.pages || []
+    return pages.flat()
+  }, [activitiesQuery.data])
 
   // Handle scroll for infinite loading
   useEffect(() => {
@@ -196,38 +144,43 @@ export default function DashboardPage() {
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = container
       // Load more when user is within 100px of the bottom
-      if (scrollHeight - scrollTop - clientHeight < 100 && hasMoreActivities && !activitiesLoading) {
-        loadMoreActivities()
+      if (scrollHeight - scrollTop - clientHeight < 100) {
+        if (activitiesQuery.hasNextPage && !activitiesQuery.isFetchingNextPage) {
+          activitiesQuery.fetchNextPage()
+        }
       }
     }
 
     container.addEventListener('scroll', handleScroll)
     return () => container.removeEventListener('scroll', handleScroll)
-  }, [hasMoreActivities, activitiesLoading, loadMoreActivities])
+  }, [activitiesQuery.hasNextPage, activitiesQuery.isFetchingNextPage, activitiesQuery.fetchNextPage])
 
   useEffect(() => {
     // Check authentication
-    const token = getToken()
     if (!token) {
       router.push('/auth/signin')
       return
     }
+  }, [router, token])
 
-    // Fetch user role
-    const fetchUserRole = async () => {
-      try {
-        const user = await apiClient.getUserRole()
-        if (user?.role) {
-          setUserRole(user.role)
-        }
-      } catch (error) {
-        console.error('Failed to fetch user role:', error)
-      }
+  // Listen for task update events and invalidate queries
+  useEffect(() => {
+    const handleTaskUpdate = () => {
+      // Invalidate all dashboard-related queries to force refetch
+      queryClient.invalidateQueries({ queryKey: ['tasks', 'stats'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks', 'inProgress'] })
+      queryClient.invalidateQueries({ queryKey: ['activities'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', 'dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['team', 'members', 'dashboard'] })
     }
 
-    fetchUserRole()
-    fetchStats()
-  }, [router, fetchStats])
+    if (typeof window !== 'undefined') {
+      window.addEventListener('tasksUpdated', handleTaskUpdate)
+      return () => {
+        window.removeEventListener('tasksUpdated', handleTaskUpdate)
+      }
+    }
+  }, [queryClient])
 
   // Calculate percentages for task status - show all statuses
   // Ensure all values are numbers (default to 0 if undefined/null/NaN)
@@ -434,15 +387,21 @@ export default function DashboardPage() {
     },
   ]
 
-  const isAdmin = userRole === 'ADMIN'
-  const isSuperAdmin = userRole === 'SUPER_ADMIN'
+  const normalizedRole = String((userRoleQuery.data as any)?.role || 'USER').toUpperCase()
+  const isAdmin = normalizedRole === 'ADMIN'
+  const isSuperAdmin = normalizedRole === 'SUPER_ADMIN'
 
   return (
     <MainLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Dashboard</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-3xl font-bold">Dashboard</h1>
+              {(statsQuery.isFetching || inProgressTasksQuery.isFetching) && (
+                <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+              )}
+            </div>
             <p className="text-muted-foreground">Overview of your tasks and team performance</p>
           </div>
           {(isAdmin || isSuperAdmin) && (
@@ -701,12 +660,12 @@ export default function DashboardPage() {
                   )
                 })
               )}
-              {activitiesLoading && (
+              {activitiesQuery.isFetchingNextPage && (
                 <div className="text-center text-muted-foreground py-4">
                   Loading more activities...
                 </div>
               )}
-              {!hasMoreActivities && activities.length > 0 && (
+              {!activitiesQuery.hasNextPage && activities.length > 0 && (
                 <div className="text-center text-muted-foreground py-4 text-sm">
                   No more activities to load
                 </div>
