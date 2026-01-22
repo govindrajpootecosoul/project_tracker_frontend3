@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Edit, Trash2, MessageSquare, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, Users, X, Loader2, MoreVertical, Minus, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, Edit, Trash2, MessageSquare, CheckCircle2, Calendar, List, Grid3x3, LayoutGrid, Users, X, Loader2, MoreVertical, Minus, ChevronLeft, ChevronRight, ChevronDown, Pin } from 'lucide-react'
 import { format } from 'date-fns'
 import type { TaskComment } from '@/types/comments'
 import { TaskListSkeleton, TaskTableSkeleton } from '@/components/skeletons/task-skeleton'
@@ -3123,7 +3123,12 @@ export default function TasksPage() {
                       <SelectItem value="none">None</SelectItem>
                       {sortedProjectsForTaskForm.map((project) => (
                         <SelectItem key={project.id} value={project.id}>
-                          {pinnedProjectIds.has(project.id) ? `Pinned • ${project.name}` : project.name}
+                          <span className="flex items-center gap-1.5">
+                            {pinnedProjectIds.has(project.id) && (
+                              <Pin className="h-3.5 w-3.5 text-primary fill-primary flex-shrink-0" />
+                            )}
+                            {project.name}
+                          </span>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -3137,7 +3142,30 @@ export default function TasksPage() {
                         id="pin-project"
                         type="checkbox"
                         checked={pinSelectedProject}
-                        onChange={(e) => setPinSelectedProject(e.target.checked)}
+                        onChange={(e) => {
+                          const isChecked = e.target.checked
+                          setPinSelectedProject(isChecked)
+                          const projectId = formData.projectId.trim()
+                          if (projectId) {
+                            if (isChecked) {
+                              // Pin the project immediately
+                              setPinnedProjectIds((prev) => {
+                                const next = new Set(prev)
+                                next.add(projectId)
+                                persistPinnedProjects(next)
+                                return next
+                              })
+                            } else {
+                              // Unpin the project immediately
+                              setPinnedProjectIds((prev) => {
+                                const next = new Set(prev)
+                                next.delete(projectId)
+                                persistPinnedProjects(next)
+                                return next
+                              })
+                            }
+                          }
+                        }}
                       />
                       <Label htmlFor="pin-project" className="text-sm">
                         Pin this project
