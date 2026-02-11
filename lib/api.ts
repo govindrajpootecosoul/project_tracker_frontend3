@@ -162,28 +162,57 @@ class ApiClient {
         if (contentType && contentType.includes('application/json')) {
           const jsonData = await clonedResponse.json()
           error = jsonData || {}
-          errorMessage = error.error || error.message || errorMessage
+          // Extract error message from various possible fields
+          errorMessage = error.error || error.message || error.details || errorMessage
         } else {
           // If response is not JSON, try to get text
           const text = await clonedResponse.text()
           if (text && text.trim()) {
             try {
               error = JSON.parse(text)
-              errorMessage = error.error || error.message || errorMessage
+              errorMessage = error.error || error.message || error.details || errorMessage
             } catch {
               errorMessage = text || errorMessage
             }
           } else {
-            // Use status text if no body
-            errorMessage = response.statusText || errorMessage
+            // Use status text if no body, or provide specific messages for common status codes
+            if (response.status === 401) {
+              errorMessage = 'Unauthorized - Invalid token'
+            } else if (response.status === 403) {
+              errorMessage = 'Forbidden - Insufficient permissions'
+            } else {
+              errorMessage = response.statusText || errorMessage
+            }
           }
         }
       } catch (e: any) {
-        // If we can't parse the error, use the status text
-        errorMessage = response.statusText || errorMessage
+        // If we can't parse the error, use the status text or provide default messages
+        if (response.status === 401) {
+          errorMessage = 'Unauthorized - Invalid token'
+        } else if (response.status === 403) {
+          errorMessage = 'Forbidden - Insufficient permissions'
+        } else {
+          errorMessage = response.statusText || errorMessage
+        }
         if (e?.message) {
           console.warn('Error parsing response:', e.message)
         }
+      }
+      
+      // Handle 401 Unauthorized errors - clear token and provide helpful message
+      if (response.status === 401) {
+        // Clear invalid token
+        this.setToken(null)
+        // Don't log 401 errors excessively - they're expected when token is invalid/expired
+        // Only log if we have additional context
+        if (error && typeof error === 'object' && Object.keys(error).length > 0) {
+          console.warn('Authentication failed:', {
+            endpoint,
+            status: response.status,
+            error: errorMessage,
+          })
+        }
+        throw new Error(errorMessage)
       }
       
       // Provide more helpful error messages
@@ -191,15 +220,20 @@ class ApiClient {
         throw new Error('Backend error: Please ensure Prisma client is regenerated. Stop the backend server, run "npm run db:generate" and "npm run db:push" in the backend directory, then restart the server.')
       }
       
-      // Only log errors for non-404 status codes (404s are expected for missing resources)
-      if (response.status !== 404) {
+      // Only log errors for non-404 and non-401 status codes
+      // 404s are expected for missing resources, 401s are handled above
+      if (response.status !== 404 && response.status !== 401) {
         // Build log object with only meaningful data
         const logData: any = {
           endpoint,
           url,
           status: response.status,
           statusText: response.statusText,
-          error: errorMessage,
+        }
+        
+        // Always include error message if available
+        if (errorMessage && errorMessage !== `HTTP error! status: ${response.status}`) {
+          logData.error = errorMessage
         }
         
         // Only include fullError if it has meaningful content

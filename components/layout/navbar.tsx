@@ -197,13 +197,42 @@ export function Navbar() {
   // Fetch functions need to be defined before useEffect - wrapped in useCallback to prevent infinite loops
   const fetchNotifications = useCallback(async () => {
     try {
+      // Check if user is authenticated before making requests
+      const token = getToken()
+      if (!token) {
+        setNotifications([])
+        setUnreadCount(0)
+        return []
+      }
+
       const [notificationsResponse, collabRequests, projectCollabRequests, sentProjectCollabRequests, subscriptionCollabRequests, sentSubscriptionCollabRequests] = await Promise.all([
         apiClient.getNotifications(),
-        apiClient.getCredentialCollaborationRequests().catch(() => []),
-        apiClient.getProjectCollaborationRequests().catch(() => []),
-        apiClient.getSentProjectCollaborationRequests().catch(() => []),
-        apiClient.getSubscriptionCollaborationRequests().catch(() => []),
-        apiClient.getSentSubscriptionCollaborationRequests().catch(() => []),
+        apiClient.getCredentialCollaborationRequests().catch((err: any) => {
+          // Silently handle 401 errors (expected when not authenticated)
+          if (err?.message?.includes('Unauthorized')) return []
+          console.warn('Failed to fetch credential collaboration requests:', err)
+          return []
+        }),
+        apiClient.getProjectCollaborationRequests().catch((err: any) => {
+          if (err?.message?.includes('Unauthorized')) return []
+          console.warn('Failed to fetch project collaboration requests:', err)
+          return []
+        }),
+        apiClient.getSentProjectCollaborationRequests().catch((err: any) => {
+          if (err?.message?.includes('Unauthorized')) return []
+          console.warn('Failed to fetch sent project collaboration requests:', err)
+          return []
+        }),
+        apiClient.getSubscriptionCollaborationRequests().catch((err: any) => {
+          if (err?.message?.includes('Unauthorized')) return []
+          console.warn('Failed to fetch subscription collaboration requests:', err)
+          return []
+        }),
+        apiClient.getSentSubscriptionCollaborationRequests().catch((err: any) => {
+          if (err?.message?.includes('Unauthorized')) return []
+          console.warn('Failed to fetch sent subscription collaboration requests:', err)
+          return []
+        }),
       ])
       const notificationsData = notificationsResponse as Notification[]
       setNotifications(notificationsData)
@@ -310,7 +339,13 @@ export function Navbar() {
       }
       
       return notificationsData
-    } catch (error) {
+    } catch (error: any) {
+      // Silently handle 401 errors (expected when not authenticated)
+      if (error?.message?.includes('Unauthorized')) {
+        setNotifications([])
+        setUnreadCount(0)
+        return []
+      }
       console.error('Failed to fetch notifications:', error)
       return []
     }
@@ -318,9 +353,19 @@ export function Navbar() {
 
   const fetchUnreadCount = useCallback(async () => {
     try {
+      const token = getToken()
+      if (!token) {
+        setUnreadCount(0)
+        return
+      }
       const data = await apiClient.getUnreadNotificationCount() as { count: number }
       setUnreadCount(data.count)
-    } catch (error) {
+    } catch (error: any) {
+      // Silently handle 401 errors (expected when not authenticated)
+      if (error?.message?.includes('Unauthorized')) {
+        setUnreadCount(0)
+        return
+      }
       console.error('Failed to fetch unread count:', error)
     }
   }, [])
@@ -337,6 +382,14 @@ export function Navbar() {
   const fetchUserDetails = useCallback(
     async (options?: { force?: boolean }) => {
       try {
+        const token = getToken()
+        if (!token) {
+          setUser(null)
+          setUserDetails(null)
+          setIsUserRefreshing(false)
+          return
+        }
+
         const useCache = !options?.force
         if (useCache) {
           const cached = loadCachedUserDetails()
@@ -352,8 +405,14 @@ export function Navbar() {
         if (data) {
           applyUserDetails(data)
         }
-      } catch (error) {
-        console.error('Failed to fetch user details:', error)
+      } catch (error: any) {
+        // Silently handle 401 errors (expected when not authenticated)
+        if (error?.message?.includes('Unauthorized')) {
+          setUser(null)
+          setUserDetails(null)
+        } else {
+          console.error('Failed to fetch user details:', error)
+        }
       } finally {
         setIsUserRefreshing(false)
       }

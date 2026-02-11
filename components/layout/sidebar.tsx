@@ -78,13 +78,22 @@ export function Sidebar() {
           role: user.role || 'USER',
         })
       } catch (error: any) {
-        console.error('Failed to fetch user permissions:', error)
-        // Set default permissions on error
-        setUserPermissions({
-          hasCredentialAccess: false,
-          hasSubscriptionAccess: false,
-          role: 'USER',
-        })
+        // Silently handle 401 errors (expected when not authenticated)
+        if (error?.message?.includes('Unauthorized')) {
+          setUserPermissions({
+            hasCredentialAccess: false,
+            hasSubscriptionAccess: false,
+            role: 'USER',
+          })
+        } else {
+          console.error('Failed to fetch user permissions:', error)
+          // Set default permissions on error
+          setUserPermissions({
+            hasCredentialAccess: false,
+            hasSubscriptionAccess: false,
+            role: 'USER',
+          })
+        }
       }
     }
 

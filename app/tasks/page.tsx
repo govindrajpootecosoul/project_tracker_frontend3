@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { MainLayout } from '@/components/layout/main-layout'
 import { apiClient } from '@/lib/api'
@@ -129,7 +129,7 @@ const createInitialFormData = (): FormData => ({
 
 const initialFormData: FormData = createInitialFormData()
 
-export default function TasksPage() {
+function TasksPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [tasks, setTasks] = useState<Task[]>([])
@@ -4099,5 +4099,22 @@ export default function TasksPage() {
         </Dialog>
       </div>
     </MainLayout>
+  )
+}
+
+export default function TasksPage() {
+  return (
+    <Suspense fallback={
+      <MainLayout>
+        <div className="flex items-center justify-center h-screen">
+          <div className="text-center">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <p className="text-muted-foreground">Loading tasks...</p>
+          </div>
+        </div>
+      </MainLayout>
+    }>
+      <TasksPageContent />
+    </Suspense>
   )
 }
