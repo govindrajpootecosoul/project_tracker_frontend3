@@ -111,8 +111,11 @@ export default function ProjectsPage() {
       Date.now() - projectsCacheTimestamp < PROJECTS_CACHE_DURATION
 
     if (cacheIsValid) {
+      // Show cached data immediately
       setProjects(projectsCache as Project[])
+      // Only set refreshing (not initial loading) to show subtle refresh indicator
       setIsRefreshing(true)
+      setIsInitialLoading(false) // Don't show skeleton, we have cached data
       apiClient
         .getProjects({ limit: 1000, skip: 0, useCache: false })
         .then((data) => {
@@ -131,9 +134,10 @@ export default function ProjectsPage() {
       return
     }
 
+    // Only show initial loading if we have no cached data
     try {
       setIsInitialLoading(true)
-      setIsRefreshing(true)
+      setIsRefreshing(false) // Not refreshing, this is initial load
       const data = await apiClient.getProjects({ limit: 1000, skip: 0, useCache })
       // Handle new paginated response format
       const projectsArray = Array.isArray(data)
@@ -531,10 +535,7 @@ export default function ProjectsPage() {
   const isSuperAdmin = userRole.toUpperCase() === 'SUPER_ADMIN'
 
   const matchesDepartmentFilter = useCallback((project: Project) => {
-    if (departmentFilter === 'all') {
-      // Only Super Admins can see all departments
-      return isSuperAdmin
-    }
+    if (departmentFilter === 'all') return true
     const projectDepartment = project.department?.trim().toLowerCase()
     const filterDepartment = departmentFilter.trim().toLowerCase()
     return projectDepartment === filterDepartment
@@ -574,14 +575,6 @@ export default function ProjectsPage() {
 
     return sorted
   }, [projects, matchesSearchQuery, matchesDepartmentFilter, projectsSort])
-
-  // Set default department filter for non-Super Admins
-  useEffect(() => {
-    // If user is not Super Admin and filter is set to 'all', set it to their department
-    if (!isSuperAdmin && departmentFilter === 'all' && userDepartment) {
-      setDepartmentFilter(userDepartment)
-    }
-  }, [isSuperAdmin, userDepartment, departmentFilter])
 
   // Reset collaboration project department filter for non-Super Admins
   useEffect(() => {

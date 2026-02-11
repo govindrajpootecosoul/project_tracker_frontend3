@@ -59,8 +59,9 @@ export default function DashboardPage() {
     queryKey: ['tasks', 'stats', currentView],
     queryFn: () => apiClient.getTaskStats(currentView, false), // Disable cache for fresh data
     enabled: Boolean(token),
-    staleTime: 0, // Always consider data stale for immediate refetch
+    staleTime: 1000 * 30, // 30 seconds - prevent refetch on mount if data is fresh
     refetchInterval: 30000, // Refetch every 30 seconds
+    refetchOnMount: false, // Don't refetch on mount if data is fresh
   })
 
   const projectsQuery = useQuery({
@@ -100,8 +101,9 @@ export default function DashboardPage() {
       return tasksData.filter((task: any) => String(task.status || '').toUpperCase().trim() === 'IN_PROGRESS')
     },
     enabled: Boolean(token),
-    staleTime: 0, // Always consider data stale for immediate refetch
+    staleTime: 1000 * 30, // 30 seconds - prevent refetch on mount if data is fresh
     refetchInterval: 30000, // Refetch every 30 seconds
+    refetchOnMount: false, // Don't refetch on mount if data is fresh
   })
 
   const activitiesQuery = useInfiniteQuery({
@@ -116,7 +118,8 @@ export default function DashboardPage() {
       return lastPage.length === 20 ? loaded : undefined
     },
     enabled: Boolean(token),
-    staleTime: 0, // Always consider data stale for immediate refetch
+    staleTime: 1000 * 60 * 2, // 2 minutes - prevent refetch on mount if data is fresh
+    refetchOnMount: false, // Don't refetch on mount if data is fresh
   })
 
   const stats = (statsQuery.data as any) || {

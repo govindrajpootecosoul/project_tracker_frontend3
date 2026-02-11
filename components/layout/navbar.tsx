@@ -101,6 +101,7 @@ interface Notification {
 export function Navbar() {
   const router = useRouter()
 
+  const [mounted, setMounted] = useState(false)
   const [user, setUser] = useState<{
     id?: string
     name?: string
@@ -359,6 +360,10 @@ export function Navbar() {
     },
     [applyUserDetails, loadCachedUserDetails]
   )
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   useEffect(() => {
     const cached = loadCachedUserDetails()
@@ -902,7 +907,7 @@ export function Navbar() {
         </div>
         
         <div className="flex items-center gap-4">
-          {user && (
+          {mounted && user && (
             <>
               <Button
                 variant="ghost"
@@ -1338,7 +1343,7 @@ export function Navbar() {
               </Popover>
             </>
           )}
-          {!user && (
+          {mounted && !user && (
             <Button
               variant="default"
               size="sm"

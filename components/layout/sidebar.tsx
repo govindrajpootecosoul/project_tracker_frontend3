@@ -119,8 +119,8 @@ export function Sidebar() {
       // Set daily thought from API (automatically rotated based on day)
       if (data.dailyThought?.content) {
         setDailyThought(data.dailyThought.content)
-      } else if (thoughtsList.length > 0) {
-        // Fallback: calculate based on day index
+      } else if (thoughtsList.length > 0 && typeof window !== 'undefined') {
+        // Fallback: calculate based on day index (only on client to prevent hydration mismatch)
         const dayIndex = Math.floor(Date.now() / (1000 * 60 * 60 * 24))
         const thoughtIndex = dayIndex % thoughtsList.length
         setDailyThought(thoughtsList[thoughtIndex]?.content || null)
@@ -154,15 +154,23 @@ export function Sidebar() {
     }
   }, [])
 
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   const displayThought = useMemo(() => {
     const fallback = 'We do not have any notice for you yet. Share your thoughts with your peers.'
     if (dailyThought) return dailyThought
     if (!thoughts.length) return fallback
+    // Only calculate day index on client to prevent hydration mismatch
+    if (!mounted) return fallback
     // Fallback: calculate based on day index
     const dayIndex = Math.floor(Date.now() / (1000 * 60 * 60 * 24))
     const thoughtIndex = dayIndex % thoughts.length
     return thoughts[thoughtIndex]?.content || fallback
-  }, [dailyThought, thoughts])
+  }, [dailyThought, thoughts, mounted])
 
   const isSuperAdmin = useMemo(() => {
     const roleUpper = userPermissions.role?.toUpperCase() || ''
@@ -273,7 +281,7 @@ export function Sidebar() {
 
   // Check if a thought is selected for today
   const isSelectedForToday = (thought: { selectedForDate?: string | null }) => {
-    if (!thought.selectedForDate) return false
+    if (!thought.selectedForDate || typeof window === 'undefined') return false
     const selectedDate = new Date(thought.selectedForDate)
     const today = new Date()
     today.setHours(0, 0, 0, 0)
@@ -283,26 +291,34 @@ export function Sidebar() {
 
   // Filter menu items based on permissions
   // Check permissions for all users, including admins
-  const visibleMenuItems = menuItems.filter(item => {
-    // Check super admin requirement
-    if (item.requireSuperAdmin && !isSuperAdmin) {
-      return false
+  // Only filter after component has mounted to prevent hydration mismatch
+  const visibleMenuItems = useMemo(() => {
+    // During SSR or before mount, show all non-permission items to prevent hydration mismatch
+    if (!mounted) {
+      return menuItems.filter(item => !item.requirePermission && !item.requireSuperAdmin && !item.requireAdmin)
     }
     
-    // Check admin requirement (ADMIN or SUPER_ADMIN)
-    if (item.requireAdmin && !isAdmin) {
-      return false
-    }
-    
-    // Always show items that don't require permissions
-    if (!item.requirePermission) return true
-    
-    // For items that require permissions, check if user has the permission
-    // Even admins need to have the permission enabled to see these items
-    const hasPermission = userPermissions[item.requirePermission as keyof typeof userPermissions] === true
-    
-    return hasPermission
-  })
+    return menuItems.filter(item => {
+      // Check super admin requirement
+      if (item.requireSuperAdmin && !isSuperAdmin) {
+        return false
+      }
+      
+      // Check admin requirement (ADMIN or SUPER_ADMIN)
+      if (item.requireAdmin && !isAdmin) {
+        return false
+      }
+      
+      // Always show items that don't require permissions
+      if (!item.requirePermission) return true
+      
+      // For items that require permissions, check if user has the permission
+      // Even admins need to have the permission enabled to see these items
+      const hasPermission = userPermissions[item.requirePermission as keyof typeof userPermissions] === true
+      
+      return hasPermission
+    })
+  }, [mounted, isSuperAdmin, isAdmin, userPermissions])
 
   return (
     <>

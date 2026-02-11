@@ -343,6 +343,13 @@ class ApiClient {
     return this.request(`/tasks/${id}`)
   }
 
+  async getProjectTasks(projectId: string, options?: { limit?: number; skip?: number }): Promise<PaginatedTasksResponse> {
+    const { limit = 10000, skip = 0 } = options || {}
+    const endpoint = `/tasks/project/${projectId}?limit=${limit}&skip=${skip}`
+    const data = await this.request<PaginatedTasksResponse>(endpoint)
+    return data
+  }
+
   async getAssignableMembers(search?: string) {
     const queryParams = new URLSearchParams()
     if (search) queryParams.append('search', search)

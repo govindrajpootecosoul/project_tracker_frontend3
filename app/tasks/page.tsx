@@ -449,29 +449,28 @@ export default function TasksPage() {
       setIsInitialLoadingMyTasks(true)
       setIsLoadingMyTasks(true)
       const page = overridePage !== undefined ? overridePage : myTasksPage
-      // When project filter is active, fetch all tasks to ensure we get all tasks for that project
-      const itemsPerPage = projectFilter ? 10000 : (overrideItemsPerPage !== undefined ? overrideItemsPerPage : myTasksItemsPerPage)
-      const skip = projectFilter ? 0 : (page - 1) * itemsPerPage
-      const result = await apiClient.getMyTasks({ limit: itemsPerPage, skip })
-      const data = result.tasks || result // Handle both new and old format
-      const tasksArray = Array.isArray(data) ? data : []
       
-      // Filter by project if projectFilter is active
-      const filteredTasks = projectFilter 
-        ? tasksArray.filter(task => task.projectId === projectFilter || task.project?.id === projectFilter)
-        : tasksArray
-      
-      setTasks(filteredTasks)
-      
-      // Update total count from API response
+      // When project filter is active, use the new project tasks endpoint
       if (projectFilter) {
-        // When filtering by project, use the filtered count
-        setMyTasksTotal(filteredTasks.length)
-      } else if (result.total !== undefined) {
-        setMyTasksTotal(result.total)
+        const itemsPerPage = 10000
+        const skip = 0
+        const result = await apiClient.getProjectTasks(projectFilter, { limit: itemsPerPage, skip })
+        const tasksArray = result.tasks || []
+        setTasks(tasksArray)
+        setMyTasksTotal(result.total || tasksArray.length)
       } else {
-        // Fallback: estimate based on current page
-        setMyTasksTotal(tasksArray.length)
+        // Normal flow: fetch user's assigned tasks
+        const itemsPerPage = overrideItemsPerPage !== undefined ? overrideItemsPerPage : myTasksItemsPerPage
+        const skip = (page - 1) * itemsPerPage
+        const result = await apiClient.getMyTasks({ limit: itemsPerPage, skip })
+        const data = result.tasks || result // Handle both new and old format
+        const tasksArray = Array.isArray(data) ? data : []
+        setTasks(tasksArray)
+        if (result.total !== undefined) {
+          setMyTasksTotal(result.total)
+        } else {
+          setMyTasksTotal(tasksArray.length)
+        }
       }
     } catch (error) {
       console.error('Failed to fetch my tasks:', error)
@@ -486,32 +485,31 @@ export default function TasksPage() {
       setIsInitialLoadingTeamTasks(true)
       setIsLoadingTeamTasks(true)
       const page = overridePage !== undefined ? overridePage : teamTasksPage
-      // When project filter is active, fetch all tasks to ensure we get all tasks for that project
-      const itemsPerPage = projectFilter ? 10000 : (overrideItemsPerPage !== undefined ? overrideItemsPerPage : teamTasksItemsPerPage)
-      const skip = projectFilter ? 0 : (page - 1) * itemsPerPage
-      // Team Tasks = all tasks assigned to members of the current user's department
-      // If a member filter is selected, ask server for that member's tasks so total count is correct.
-      const memberId = teamMemberFilter !== 'all' ? teamMemberFilter : undefined
-      const status = teamTaskStatusFilter !== 'all' ? teamTaskStatusFilter : undefined
-      const result = await apiClient.getDepartmentTasks({ limit: itemsPerPage, skip, memberId, status })
-      const data = result.tasks || result // Handle both new and old format
-      const tasksArray = Array.isArray(data) ? data : []
       
-      // Filter by project if projectFilter is active
-      const filteredTasks = projectFilter 
-        ? tasksArray.filter(task => task.projectId === projectFilter || task.project?.id === projectFilter)
-        : tasksArray
-      
-      setTeamTasks(filteredTasks)
-      
-      // Update total count from API response
+      // When project filter is active, use the new project tasks endpoint
       if (projectFilter) {
-        // When filtering by project, use the filtered count
-        setTeamTasksTotal(filteredTasks.length)
-      } else if (result.total !== undefined) {
-        setTeamTasksTotal(result.total)
+        const itemsPerPage = 10000
+        const skip = 0
+        const result = await apiClient.getProjectTasks(projectFilter, { limit: itemsPerPage, skip })
+        const tasksArray = result.tasks || []
+        setTeamTasks(tasksArray)
+        setTeamTasksTotal(result.total || tasksArray.length)
       } else {
-        setTeamTasksTotal(tasksArray.length)
+        // Normal flow: Team Tasks = all tasks assigned to members of the current user's department
+        const itemsPerPage = overrideItemsPerPage !== undefined ? overrideItemsPerPage : teamTasksItemsPerPage
+        const skip = (page - 1) * itemsPerPage
+        // If a member filter is selected, ask server for that member's tasks so total count is correct.
+        const memberId = teamMemberFilter !== 'all' ? teamMemberFilter : undefined
+        const status = teamTaskStatusFilter !== 'all' ? teamTaskStatusFilter : undefined
+        const result = await apiClient.getDepartmentTasks({ limit: itemsPerPage, skip, memberId, status })
+        const data = result.tasks || result // Handle both new and old format
+        const tasksArray = Array.isArray(data) ? data : []
+        setTeamTasks(tasksArray)
+        if (result.total !== undefined) {
+          setTeamTasksTotal(result.total)
+        } else {
+          setTeamTasksTotal(tasksArray.length)
+        }
       }
     } catch (error) {
       console.error('Failed to fetch team tasks:', error)
@@ -539,28 +537,28 @@ export default function TasksPage() {
       setIsInitialLoadingReviewTasks(true)
       setIsLoadingReviewTasks(true)
       const page = overridePage !== undefined ? overridePage : reviewTasksPage
-      // When project filter is active, fetch all tasks to ensure we get all tasks for that project
-      const itemsPerPage = projectFilter ? 10000 : (overrideItemsPerPage !== undefined ? overrideItemsPerPage : reviewTasksItemsPerPage)
-      const skip = projectFilter ? 0 : (page - 1) * itemsPerPage
-      const result = await apiClient.getReviewTasks({ limit: itemsPerPage, skip })
-      const data = result.tasks || result // Handle both new and old format
-      const tasksArray = Array.isArray(data) ? data : []
       
-      // Filter by project if projectFilter is active
-      const filteredTasks = projectFilter 
-        ? tasksArray.filter(task => task.projectId === projectFilter || task.project?.id === projectFilter)
-        : tasksArray
-      
-      setReviewTasks(filteredTasks)
-      
-      // Update total count from API response
+      // When project filter is active, use the new project tasks endpoint
       if (projectFilter) {
-        // When filtering by project, use the filtered count
-        setReviewTasksTotal(filteredTasks.length)
-      } else if (result.total !== undefined) {
-        setReviewTasksTotal(result.total)
+        const itemsPerPage = 10000
+        const skip = 0
+        const result = await apiClient.getProjectTasks(projectFilter, { limit: itemsPerPage, skip })
+        const tasksArray = result.tasks || []
+        setReviewTasks(tasksArray)
+        setReviewTasksTotal(result.total || tasksArray.length)
       } else {
-        setReviewTasksTotal(tasksArray.length)
+        // Normal flow: fetch review tasks
+        const itemsPerPage = overrideItemsPerPage !== undefined ? overrideItemsPerPage : reviewTasksItemsPerPage
+        const skip = (page - 1) * itemsPerPage
+        const result = await apiClient.getReviewTasks({ limit: itemsPerPage, skip })
+        const data = result.tasks || result // Handle both new and old format
+        const tasksArray = Array.isArray(data) ? data : []
+        setReviewTasks(tasksArray)
+        if (result.total !== undefined) {
+          setReviewTasksTotal(result.total)
+        } else {
+          setReviewTasksTotal(tasksArray.length)
+        }
       }
     } catch (error) {
       console.error('Failed to fetch review tasks:', error)
@@ -580,31 +578,30 @@ export default function TasksPage() {
     setIsLoadingOtherDept(true)
     try {
       const page = overridePage !== undefined ? overridePage : otherDeptTasksPage
-      // When project filter is active, fetch all tasks to ensure we get all tasks for that project
-      const itemsPerPage = projectFilter ? 10000 : (overrideItemsPerPage !== undefined ? overrideItemsPerPage : otherDeptTasksItemsPerPage)
-      const skip = projectFilter ? 0 : (page - 1) * itemsPerPage
-      const selectedDept = departmentFilter !== 'all' ? departmentFilter : undefined
-      const memberId = otherDeptMemberFilter !== 'all' ? otherDeptMemberFilter : undefined
-      const result = await apiClient.getAllDepartmentsTasks({ limit: itemsPerPage, skip, department: selectedDept, memberId })
-      const data = result.tasks || result // Handle both new and old format
-      const tasksArray = Array.isArray(data) ? data : []
-      let filtered = tasksArray
       
-      // Filter by project if projectFilter is active
+      // When project filter is active, use the new project tasks endpoint
       if (projectFilter) {
-        filtered = filtered.filter(task => task.projectId === projectFilter || task.project?.id === projectFilter)
-      }
-      
-      setOtherDepartmentTasks(filtered)
-      
-      // Update total count from API response
-      if (projectFilter) {
-        // When filtering by project, use the filtered count
-        setOtherDeptTasksTotal(filtered.length)
-      } else if (result.total !== undefined) {
-        setOtherDeptTasksTotal(result.total)
+        const itemsPerPage = 10000
+        const skip = 0
+        const result = await apiClient.getProjectTasks(projectFilter, { limit: itemsPerPage, skip })
+        const tasksArray = result.tasks || []
+        setOtherDepartmentTasks(tasksArray)
+        setOtherDeptTasksTotal(result.total || tasksArray.length)
       } else {
-        setOtherDeptTasksTotal(filtered.length)
+        // Normal flow: fetch other department tasks
+        const itemsPerPage = overrideItemsPerPage !== undefined ? overrideItemsPerPage : otherDeptTasksItemsPerPage
+        const skip = (page - 1) * itemsPerPage
+        const selectedDept = departmentFilter !== 'all' ? departmentFilter : undefined
+        const memberId = otherDeptMemberFilter !== 'all' ? otherDeptMemberFilter : undefined
+        const result = await apiClient.getAllDepartmentsTasks({ limit: itemsPerPage, skip, department: selectedDept, memberId })
+        const data = result.tasks || result // Handle both new and old format
+        const tasksArray = Array.isArray(data) ? data : []
+        setOtherDepartmentTasks(tasksArray)
+        if (result.total !== undefined) {
+          setOtherDeptTasksTotal(result.total)
+        } else {
+          setOtherDeptTasksTotal(tasksArray.length)
+        }
       }
     } catch (error) {
       console.error('Failed to fetch other department tasks:', error)
@@ -993,7 +990,25 @@ export default function TasksPage() {
     }
   }, [resetForm, user?.role, fetchAssignableMembers])
 
+  const canModifyTask = useCallback((task: Task) => {
+    const role = user?.role?.toUpperCase()
+    const isPrivileged = role === 'ADMIN' || role === 'SUPER_ADMIN'
+    if (isPrivileged) return true
+
+    const isAssignee = task.assignees?.some((a) => a.user.id === user?.id) ?? false
+    if (isAssignee) return true
+
+    const isReviewerUnderReview =
+      task.reviewStatus === 'UNDER_REVIEW' && task.reviewerId && task.reviewerId === user?.id
+    return isReviewerUnderReview
+  }, [user?.id, user?.role])
+
   const openEditDialog = useCallback((task: Task) => {
+    // Check permission first
+    if (!canModifyTask(task)) {
+      alert('You don\'t have access to update this task. You can only edit tasks assigned to you or tasks you are reviewing.')
+      return
+    }
     // Save scroll position before opening dialog
     const scrollY = window.scrollY
     if (typeof window !== 'undefined') {
@@ -1045,7 +1060,7 @@ export default function TasksPage() {
         }
       })
     }
-  }, [user?.role, fetchAssignableMembers])
+  }, [user?.role, fetchAssignableMembers, canModifyTask])
 
   const closeDialog = useCallback(() => {
     setIsDialogOpen(false)
@@ -1299,6 +1314,13 @@ export default function TasksPage() {
   }, [user?.role, duplicatingTaskId])
 
   const handleDeleteTask = useCallback(async (taskId: string) => {
+    // Find the task to check permissions
+    const allTasks = [...tasks, ...teamTasks, ...reviewTasks, ...otherDepartmentTasks]
+    const task = allTasks.find(t => t.id === taskId)
+    if (task && !canModifyTask(task)) {
+      alert('You don\'t have access to delete this task. You can only delete tasks assigned to you or tasks you are reviewing.')
+      return
+    }
     if (!confirm('Are you sure you want to delete this task?')) return
     try {
       await apiClient.deleteTask(taskId)
@@ -1318,9 +1340,16 @@ export default function TasksPage() {
       console.error('Failed to delete task:', error)
       alert('Failed to delete task')
     }
-  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchProjects])
+  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks, fetchProjects, tasks, teamTasks, reviewTasks, otherDepartmentTasks, canModifyTask])
 
   const handleMarkComplete = useCallback(async (taskId: string) => {
+    // Find the task to check permissions
+    const allTasks = [...tasks, ...teamTasks, ...reviewTasks, ...otherDepartmentTasks]
+    const task = allTasks.find(t => t.id === taskId)
+    if (task && !canModifyTask(task)) {
+      alert('You don\'t have access to update this task. You can only update tasks assigned to you or tasks you are reviewing.')
+      return
+    }
     try {
       await apiClient.updateTask(taskId, { status: 'COMPLETED' })
       
@@ -1342,9 +1371,16 @@ export default function TasksPage() {
       console.error('Failed to update task:', error)
       alert('Failed to update task')
     }
-  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks])
+  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks, tasks, teamTasks, reviewTasks, otherDepartmentTasks, canModifyTask])
 
   const handleQuickStatusUpdate = useCallback(async (taskId: string, newStatus: TaskStatus) => {
+    // Find the task to check permissions
+    const allTasks = [...tasks, ...teamTasks, ...reviewTasks, ...otherDepartmentTasks]
+    const task = allTasks.find(t => t.id === taskId)
+    if (task && !canModifyTask(task)) {
+      alert('You don\'t have access to update this task. You can only update tasks assigned to you or tasks you are reviewing.')
+      return
+    }
     try {
       await apiClient.updateTask(taskId, { status: newStatus })
       
@@ -1366,7 +1402,7 @@ export default function TasksPage() {
       console.error('Failed to update task status:', error)
       alert('Failed to update task status')
     }
-  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks])
+  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks, tasks, teamTasks, reviewTasks, otherDepartmentTasks, canModifyTask])
 
   const openCommentDialog = useCallback(async (task: Task) => {
     // Save scroll position before opening dialog
@@ -1580,7 +1616,8 @@ export default function TasksPage() {
       await apiClient.requestReview(selectedTaskForComment.id, reviewerId)
       setIsReviewDialogOpen(false)
       setSelectedTaskForComment(null)
-      // Auto-refresh removed - no automatic refresh on review request
+      // Refresh lists so review status changes show immediately
+      await Promise.all([fetchTasks(), fetchTeamTasks(), fetchReviewTasks()])
       // Refresh notifications immediately
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('refreshNotifications'))
@@ -1618,7 +1655,18 @@ export default function TasksPage() {
     try {
       setAcceptingTaskId(taskId)
       await apiClient.acceptReviewRequest(taskId, true)
-      // Auto-refresh removed - no automatic refresh on accept review
+      // Refresh review list and switch user context to Under Review
+      await fetchReviewTasks()
+      setActiveTab('review')
+      // Open the review dialog for this task (lets reviewer edit if needed)
+      try {
+        const updatedTask = await apiClient.getTask(taskId) as Task
+        if (updatedTask) {
+          openReviewDialog(updatedTask)
+        }
+      } catch (e) {
+        // If fetching fails, still keep tab switched; list is refreshed above.
+      }
       // Close notification popover if open
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('refreshNotifications'))
@@ -1630,7 +1678,7 @@ export default function TasksPage() {
     } finally {
       setAcceptingTaskId(null)
     }
-  }, [fetchTasks, fetchTeamTasks, fetchReviewTasks, acceptingTaskId])
+  }, [fetchReviewTasks, acceptingTaskId, openReviewDialog])
 
   const handleCancelReviewRequest = useCallback(async (taskId: string) => {
     // Prevent double-clicks
@@ -2040,6 +2088,11 @@ export default function TasksPage() {
             onClick={(e) => {
               e.preventDefault()
               e.stopPropagation()
+              if (!canModifyTask(task)) {
+                alert('You don\'t have access to update this task. You can only edit tasks assigned to you or tasks you are reviewing.')
+                setOpenActionTaskId(null)
+                return
+              }
               const scrollY = window.scrollY
               if (typeof window !== 'undefined') {
                 (window as any).__preservedScrollY = scrollY
@@ -2060,7 +2113,8 @@ export default function TasksPage() {
               setTimeout(restoreScroll, 100)
               setTimeout(restoreScroll, 200)
             }}
-            className={actionItemClass}
+            className={`${actionItemClass} ${!canModifyTask(task) ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title={!canModifyTask(task) ? 'You don\'t have access to update this task. You can only edit tasks assigned to you or tasks you are reviewing.' : undefined}
           >
             <Edit className="h-4 w-4" />
             Edit Task
@@ -2070,6 +2124,11 @@ export default function TasksPage() {
             onClick={(e) => {
               e.preventDefault()
               e.stopPropagation()
+              if (!canModifyTask(task)) {
+                alert('You don\'t have access to delete this task. You can only delete tasks assigned to you or tasks you are reviewing.')
+                setOpenActionTaskId(null)
+                return
+              }
               const scrollY = window.scrollY
               if (typeof window !== 'undefined') {
                 (window as any).__preservedScrollY = scrollY
@@ -2090,7 +2149,8 @@ export default function TasksPage() {
               setTimeout(restoreScroll, 100)
               setTimeout(restoreScroll, 200)
             }}
-            className={`${actionItemClass} text-red-600`}
+            className={`${actionItemClass} text-red-600 ${!canModifyTask(task) ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title={!canModifyTask(task) ? 'You don\'t have access to delete this task. You can only delete tasks assigned to you or tasks you are reviewing.' : undefined}
           >
             <Trash2 className="h-4 w-4" />
             Delete Task
@@ -2130,7 +2190,11 @@ export default function TasksPage() {
           <div className="flex flex-wrap gap-2 mb-3 flex-shrink-0">
             <Popover>
               <PopoverTrigger asChild>
-                <Badge className={`${getStatusBadgeColor(task.status)} cursor-pointer hover:opacity-80 transition-opacity`}>
+                <Badge
+                  className={`${getStatusBadgeColor(task.status)} ${
+                    canModifyTask(task) ? 'cursor-pointer hover:opacity-80 transition-opacity' : 'cursor-not-allowed opacity-80'
+                  }`}
+                >
                   {task.status.replace('_', ' ')}
                 </Badge>
               </PopoverTrigger>
@@ -2140,10 +2204,16 @@ export default function TasksPage() {
                   {(['YTS', 'IN_PROGRESS', 'ON_HOLD', 'RECURRING', 'COMPLETED'] as TaskStatus[]).map((status) => (
                     <button
                       key={status}
-                      onClick={() => handleQuickStatusUpdate(task.id, status)}
+                      onClick={() => {
+                        if (!canModifyTask(task)) {
+                          alert('You don\'t have access to update this task. You can only update tasks assigned to you or tasks you are reviewing.')
+                          return
+                        }
+                        handleQuickStatusUpdate(task.id, status)
+                      }}
                       className={`w-full text-left px-2 py-1.5 text-sm rounded hover:bg-accent transition-colors ${
                         task.status === status ? 'bg-accent font-medium' : ''
-                      }`}
+                      } ${!canModifyTask(task) ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       {status.replace('_', ' ')}
                     </button>
@@ -2232,7 +2302,13 @@ export default function TasksPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleMarkComplete(task.id)}
+              onClick={() => {
+                if (!canModifyTask(task)) {
+                  alert('You don\'t have access to update this task. You can only update tasks assigned to you or tasks you are reviewing.')
+                  return
+                }
+                handleMarkComplete(task.id)
+              }}
               disabled={task.status === 'COMPLETED'}
               className="flex-1"
             >
@@ -2465,10 +2541,16 @@ export default function TasksPage() {
                               {(['YTS', 'IN_PROGRESS', 'ON_HOLD', 'RECURRING', 'COMPLETED'] as TaskStatus[]).map((status) => (
                                 <button
                                   key={status}
-                                  onClick={() => handleQuickStatusUpdate(task.id, status)}
+                                  onClick={() => {
+                                    if (!canModifyTask(task)) {
+                                      alert('You don\'t have access to update this task. You can only update tasks assigned to you or tasks you are reviewing.')
+                                      return
+                                    }
+                                    handleQuickStatusUpdate(task.id, status)
+                                  }}
                                   className={`w-full text-left px-2 py-1.5 text-sm rounded hover:bg-accent transition-colors ${
                                     task.status === status ? 'bg-accent font-medium' : ''
-                                  }`}
+                                  } ${!canModifyTask(task) ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 >
                                   {status.replace('_', ' ')}
                                 </button>
@@ -3577,6 +3659,23 @@ export default function TasksPage() {
                     This task is currently under review. Please approve or reject it.
                   </p>
                 </div>
+                {selectedTaskForComment?.reviewerId === user?.id && (
+                  <div className="flex justify-end">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        const task = selectedTaskForComment
+                        setIsReviewDialogOpen(false)
+                        // Open edit dialog after closing review dialog
+                        setTimeout(() => {
+                          openEditDialog(task)
+                        }, 0)
+                      }}
+                    >
+                      Edit Task
+                    </Button>
+                  </div>
+                )}
                 <div>
                   <Label htmlFor="reviewComment">Review Comment (Optional)</Label>
                   <textarea
@@ -3765,16 +3864,16 @@ export default function TasksPage() {
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.3 }}
                   >
-                    {renderTasks(projectFilter ? allProjectTasks : getUnderReviewTasks(), 'default', projectFilter ? reviewTasksPage : undefined, projectFilter ? reviewTasksItemsPerPage : undefined)}
+                    {renderTasks(getUnderReviewTasks(), 'default', projectFilter ? reviewTasksPage : undefined, projectFilter ? reviewTasksItemsPerPage : undefined)}
                   </motion.div>
                 )}
               </AnimatePresence>
-              {!isInitialLoadingReviewTasks && (projectFilter ? allProjectTasks.length > 0 : reviewTasks.length > 0) && (
+              {!isInitialLoadingReviewTasks && (projectFilter ? getUnderReviewTasks().length > 0 : reviewTasks.length > 0) && (
                 <PaginationControls
                   currentPage={reviewTasksPage}
-                  totalPages={Math.ceil((projectFilter ? allProjectTasks.length : reviewTasksTotal) / reviewTasksItemsPerPage) || 1}
+                  totalPages={Math.ceil((projectFilter ? getUnderReviewTasks().length : reviewTasksTotal) / reviewTasksItemsPerPage) || 1}
                   itemsPerPage={reviewTasksItemsPerPage}
-                  totalItems={projectFilter ? allProjectTasks.length : reviewTasksTotal}
+                  totalItems={projectFilter ? getUnderReviewTasks().length : reviewTasksTotal}
                   onPageChange={async (page) => {
                     setReviewTasksPage(page)
                     // When project filter is active, pagination is client-side only
