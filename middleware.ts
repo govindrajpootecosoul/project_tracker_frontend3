@@ -18,6 +18,15 @@ export function middleware(request: NextRequest) {
   const token = request.cookies.get('token')?.value || 
                 request.headers.get('authorization')?.replace('Bearer ', '')
 
+  // Root: redirect before RSC runs (avoids blank page and keeps page.tsx free of next/headers,
+  // which breaks when layout wraps {children} in client components).
+  if (request.nextUrl.pathname === '/') {
+    if (token) {
+      return NextResponse.redirect(new URL('/dashboard', request.url))
+    }
+    return NextResponse.redirect(new URL('/auth/signin', request.url))
+  }
+
   // If no token and trying to access protected route, redirect to login
   if (!token && (
     request.nextUrl.pathname.startsWith('/dashboard') ||

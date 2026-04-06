@@ -6,6 +6,7 @@ import { MainLayout } from '@/components/layout/main-layout'
 import { apiClient } from '@/lib/api'
 import { getToken } from '@/lib/auth-client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { motion } from 'framer-motion'
@@ -45,21 +46,27 @@ export default function DashboardPage() {
   const [currentView, setCurrentView] = useState<'my' | 'department' | 'all-departments'>('my')
   const [isScrollingPaused, setIsScrollingPaused] = useState(false)
   const activitiesContainerRef = useRef<HTMLDivElement | null>(null)
+  const [mounted, setMounted] = useState(false)
 
-  const token = typeof window !== 'undefined' ? getToken() : null
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  // Avoid SSR vs client mismatch: first paint matches server (no token), then enable queries after mount.
+  const token = mounted ? getToken() : null
 
   const userRoleQuery = useQuery({
     queryKey: ['auth', 'me'],
     queryFn: () => apiClient.getUserRole(),
-    enabled: Boolean(token),
+    enabled: mounted && Boolean(token),
     staleTime: 1000 * 60 * 5, // 5 minutes
   })
 
   const statsQuery = useQuery({
     queryKey: ['tasks', 'stats', currentView],
     queryFn: () => apiClient.getTaskStats(currentView, false), // Disable cache for fresh data
-    enabled: Boolean(token),
-    staleTime: 1000 * 30, // 30 seconds - prevent refetch on mount if data is fresh
+    enabled: mounted && Boolean(token),
+    staleTime: 1000 * 60 * 2, // 2 minutes — fewer round-trips; interval still refreshes
     refetchInterval: 30000, // Refetch every 30 seconds
     refetchOnMount: false, // Don't refetch on mount if data is fresh
   })
@@ -70,7 +77,7 @@ export default function DashboardPage() {
       const projectsData = await apiClient.getProjects({ limit: 100, skip: 0 })
       return Array.isArray(projectsData) ? projectsData : (projectsData as any)?.projects || []
     },
-    enabled: Boolean(token),
+    enabled: mounted && Boolean(token),
     staleTime: 1000 * 60 * 2, // 2 minutes
   })
 
@@ -80,7 +87,7 @@ export default function DashboardPage() {
       const membersData = await apiClient.getTeamMembers({ limit: 100, skip: 0 })
       return Array.isArray(membersData) ? membersData : (membersData as any)?.members || []
     },
-    enabled: Boolean(token),
+    enabled: mounted && Boolean(token),
     staleTime: 1000 * 60 * 2, // 2 minutes
   })
 
@@ -100,8 +107,8 @@ export default function DashboardPage() {
       const tasksData = Array.isArray(tasksResult) ? tasksResult : (tasksResult as any)?.tasks || []
       return tasksData.filter((task: any) => String(task.status || '').toUpperCase().trim() === 'IN_PROGRESS')
     },
-    enabled: Boolean(token),
-    staleTime: 1000 * 30, // 30 seconds - prevent refetch on mount if data is fresh
+    enabled: mounted && Boolean(token),
+    staleTime: 1000 * 60 * 2, // 2 minutes — aligned with stats stale window
     refetchInterval: 30000, // Refetch every 30 seconds
     refetchOnMount: false, // Don't refetch on mount if data is fresh
   })
@@ -117,7 +124,7 @@ export default function DashboardPage() {
       const loaded = allPages.reduce((sum, page) => sum + page.length, 0)
       return lastPage.length === 20 ? loaded : undefined
     },
-    enabled: Boolean(token),
+    enabled: mounted && Boolean(token),
     staleTime: 1000 * 60 * 2, // 2 minutes - prevent refetch on mount if data is fresh
     refetchOnMount: false, // Don't refetch on mount if data is fresh
   })
@@ -159,12 +166,11 @@ export default function DashboardPage() {
   }, [activitiesQuery.hasNextPage, activitiesQuery.isFetchingNextPage, activitiesQuery.fetchNextPage])
 
   useEffect(() => {
-    // Check authentication
-    if (!token) {
+    if (!mounted) return
+    if (!getToken()) {
       router.push('/auth/signin')
-      return
     }
-  }, [router, token])
+  }, [router, mounted])
 
   // Listen for task update events and invalidate queries
   useEffect(() => {
@@ -394,6 +400,9 @@ export default function DashboardPage() {
   const isAdmin = normalizedRole === 'ADMIN'
   const isSuperAdmin = normalizedRole === 'SUPER_ADMIN'
 
+  const showInitialLoad =
+    mounted && Boolean(token) && statsQuery.isPending
+
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -401,9 +410,11 @@ export default function DashboardPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-3xl font-bold">Dashboard</h1>
-              {(statsQuery.isFetching || inProgressTasksQuery.isFetching) && (
-                <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
-              )}
+              {mounted &&
+                (statsQuery.isFetching || inProgressTasksQuery.isFetching) &&
+                !statsQuery.isPending && (
+                  <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+                )}
             </div>
             <p className="text-muted-foreground">Overview of your tasks and team performance</p>
           </div>
@@ -433,6 +444,64 @@ export default function DashboardPage() {
           )}
         </div>
 
+        {showInitialLoad ? (
+          <>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Card key={i}>
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <Skeleton className="h-4 w-20" />
+                    <Skeleton className="h-9 w-9 rounded-lg" />
+                  </CardHeader>
+                  <CardContent>
+                    <Skeleton className="h-8 w-16" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Card>
+                <CardHeader className="space-y-2">
+                  <Skeleton className="h-5 w-40" />
+                  <Skeleton className="h-4 w-56" />
+                </CardHeader>
+                <CardContent>
+                  <Skeleton className="h-[240px] w-full" />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="space-y-2">
+                  <Skeleton className="h-5 w-40" />
+                  <Skeleton className="h-4 w-56" />
+                </CardHeader>
+                <CardContent>
+                  <Skeleton className="h-[240px] w-full" />
+                </CardContent>
+              </Card>
+            </div>
+            <Card>
+              <CardHeader className="space-y-2">
+                <Skeleton className="h-6 w-48" />
+                <Skeleton className="h-4 w-64" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-[350px] w-full" />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="space-y-2">
+                <Skeleton className="h-6 w-40" />
+                <Skeleton className="h-4 w-56" />
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+              </CardContent>
+            </Card>
+          </>
+        ) : (
+          <>
         {/* KPI Cards */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
           {kpiCards.map((kpi, index) => {
@@ -676,6 +745,8 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
+          </>
+        )}
       </div>
     </MainLayout>
   )
