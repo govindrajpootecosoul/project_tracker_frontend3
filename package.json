@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node -e \"require('fs').rmSync('build',{ recursive:true, force:true, maxRetries:20, retryDelay:100 });\" && next build",
     "build:with-prisma": "npm run db:generate:build && next build",
     "build:skip-prisma": "next build",
     "start": "next start",

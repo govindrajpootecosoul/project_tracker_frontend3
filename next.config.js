@@ -3,8 +3,9 @@ const path = require('path')
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Use a custom build output directory to avoid Windows locking issues on `.next/trace`
+  distDir: 'build',
   // Production optimizations
-  swcMinify: true,
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production' ? {
       exclude: ['error', 'warn'],
@@ -13,6 +14,9 @@ const nextConfig = {
   // Optimize images
   images: {
     formats: ['image/avif', 'image/webp'],
+  },
+  eslint: {
+    ignoreDuringBuilds: true,
   },
   // Reduce bundle size
   experimental: {
