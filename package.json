@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "node -e \"require('fs').rmSync('build',{ recursive:true, force:true, maxRetries:20, retryDelay:100 });\" && next build",
+    "build": "next build",
     "build:with-prisma": "npm run db:generate:build && next build",
     "build:skip-prisma": "next build",
     "start": "next start",
@@ -55,6 +55,7 @@
     "eslint": "^8.56.0",
     "eslint-config-next": "^15.0.0",
     "postcss": "^8.4.32",
+    "rimraf": "^6.1.3",
     "tailwindcss": "^3.4.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"

@@ -3,8 +3,6 @@ const path = require('path')
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // Use a custom build output directory to avoid Windows locking issues on `.next/trace`
-  distDir: 'build',
   // Production optimizations
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production' ? {
