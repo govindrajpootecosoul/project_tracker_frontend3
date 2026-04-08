@@ -197,6 +197,12 @@ function TasksPageContent() {
     [],
   )
 
+  const getLastTaskFormSelectionsStorageKey = useCallback(
+    (userId?: string | null) =>
+      userId ? `eco_project_tracker:lastTaskFormSelections:${userId}` : 'eco_project_tracker:lastTaskFormSelections',
+    [],
+  )
+
   useEffect(() => {
     if (typeof window === 'undefined') return
 
@@ -247,6 +253,23 @@ function TasksPageContent() {
       return next
     })
   }, [persistPinnedProjects])
+
+  // Default department (for Project) based on role/department to avoid repeated selection.
+  useEffect(() => {
+    if (!isDialogOpen) return
+    if (editingTask) return
+    if (!user) return
+
+    const role = user.role?.toUpperCase() || 'USER'
+    const isSuperAdmin = role === 'SUPER_ADMIN'
+    const dept = user.department?.trim() || ''
+
+    if (!isSuperAdmin && dept) {
+      setTaskProjectDepartmentFilter(dept)
+    } else {
+      setTaskProjectDepartmentFilter('all')
+    }
+  }, [isDialogOpen, editingTask, user?.role, user?.department, user])
   
   // Pagination state for My Tasks
   const [myTasksPage, setMyTasksPage] = useState(1)
@@ -339,6 +362,86 @@ function TasksPageContent() {
     })
     return list
   }, [filteredProjectsForTaskForm, pinnedProjectIds])
+
+  const lastTaskSelectionsHydratedRef = useRef(false)
+  const projectSelectionTouchedRef = useRef(false)
+  const brandSelectionTouchedRef = useRef(false)
+  useEffect(() => {
+    if (!isDialogOpen) {
+      lastTaskSelectionsHydratedRef.current = false
+      projectSelectionTouchedRef.current = false
+      brandSelectionTouchedRef.current = false
+    }
+  }, [isDialogOpen])
+
+  // Load/persist last selected project/brand to save time during task creation.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!isDialogOpen) return
+    if (editingTask) return
+    if (!user?.id) return
+
+    try {
+      const storageKey = getLastTaskFormSelectionsStorageKey(user.id)
+      const raw = window.localStorage.getItem(storageKey)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as { projectId?: string; brand?: string } | null
+      if (!parsed || typeof parsed !== 'object') return
+
+      // Only set defaults if user hasn't already chosen something for this dialog instance.
+      if (!formData.projectId && typeof parsed.projectId === 'string') {
+        const candidate = parsed.projectId.trim()
+        if (candidate && sortedProjectsForTaskForm.some((p) => p.id === candidate)) {
+          updateFormField('projectId', candidate)
+          setPinSelectedProject(pinnedProjectIds.has(candidate))
+        }
+      }
+
+      if (!formData.brand && typeof parsed.brand === 'string') {
+        const candidate = parsed.brand.trim()
+        if (candidate && brands.includes(candidate)) {
+          updateFormField('brand', candidate)
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      lastTaskSelectionsHydratedRef.current = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDialogOpen, editingTask, user?.id, sortedProjectsForTaskForm, brands])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!isDialogOpen) return
+    if (editingTask) return
+    if (!user?.id) return
+    if (!lastTaskSelectionsHydratedRef.current) return
+
+    try {
+      const storageKey = getLastTaskFormSelectionsStorageKey(user.id)
+      const existingRaw = window.localStorage.getItem(storageKey)
+      const existingParsed =
+        existingRaw && existingRaw.trim()
+          ? (JSON.parse(existingRaw) as { projectId?: string; brand?: string } | null)
+          : null
+
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          // Only persist "empty" if the user explicitly changed the selection in this dialog.
+          projectId: projectSelectionTouchedRef.current
+            ? (formData.projectId?.trim() || '')
+            : (existingParsed?.projectId || ''),
+          brand: brandSelectionTouchedRef.current
+            ? (formData.brand?.trim() || '')
+            : (existingParsed?.brand || ''),
+        }),
+      )
+    } catch {
+      // ignore
+    }
+  }, [formData.projectId, formData.brand, isDialogOpen, editingTask, user?.id, getLastTaskFormSelectionsStorageKey])
 
   useEffect(() => {
     if (!formData.projectId) return
@@ -3140,28 +3243,32 @@ function TasksPageContent() {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="task-project-department">Department (for Project)</Label>
-                  <Select
-                    value={taskProjectDepartmentFilter}
-                    onValueChange={(value) => setTaskProjectDepartmentFilter(value)}
-                  >
-                    <SelectTrigger id="task-project-department">
-                      <SelectValue placeholder="All Departments" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Departments</SelectItem>
-                      {departments.map((dept) => (
-                        <SelectItem key={dept} value={dept}>
-                          {dept}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Filter projects by department
-                  </p>
-                </div>
+                {isSuperAdminUser ? (
+                  <div>
+                    <Label htmlFor="task-project-department">Department (for Project)</Label>
+                    <Select
+                      value={taskProjectDepartmentFilter}
+                      onValueChange={(value) => setTaskProjectDepartmentFilter(value)}
+                    >
+                      <SelectTrigger id="task-project-department">
+                        <SelectValue placeholder="All Departments" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Departments</SelectItem>
+                        {departments.map((dept) => (
+                          <SelectItem key={dept} value={dept}>
+                            {dept}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Filter projects by department
+                    </p>
+                  </div>
+                ) : (
+                  <div />
+                )}
                 <div />
               </div>
 
@@ -3189,6 +3296,7 @@ function TasksPageContent() {
                   <Select
                     value={formData.projectId || 'none'}
                     onValueChange={(value) => {
+                      projectSelectionTouchedRef.current = true
                       const projectId = value === 'none' ? '' : value
                       updateFormField('projectId', projectId)
                       if (!projectId) {
@@ -3296,6 +3404,7 @@ function TasksPageContent() {
                   <Select
                     value={formData.brand || 'none'}
                     onValueChange={(value) => {
+                      brandSelectionTouchedRef.current = true
                       const brand = value === 'none' ? '' : value
                       updateFormField('brand', brand)
                     }}

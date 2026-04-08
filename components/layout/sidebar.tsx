@@ -381,7 +381,8 @@ export function Sidebar() {
           <nav className="flex-1 space-y-2">
             {visibleMenuItems.map((item) => {
               const Icon = item.icon
-              const isActive = pathname === item.href || pathname?.startsWith(item.href + '/')
+              // Avoid hydration mismatches by not computing "active" on the server render.
+              const isActive = mounted ? (pathname === item.href || pathname?.startsWith(item.href + '/')) : false
               
               return (
                 <button
@@ -398,6 +399,7 @@ export function Sidebar() {
                       : 'text-foreground hover:bg-accent hover:!text-accent-foreground'
                   )}
                   aria-current={isActive ? 'page' : undefined}
+                  suppressHydrationWarning
                 >
                   <Icon className="h-5 w-5" />
                   <span className="font-medium">{item.name}</span>
